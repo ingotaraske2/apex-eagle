@@ -4,7 +4,7 @@
  * Fires on cron: Monday + Wednesday 06:00 UTC (07:00 CET)
  * Assets:  AMD, NVDA, GOOGL
  * Mode:    Aggressive (3% risk per trade)
- * Logic:   Runs the APEX outcome loop (Gemini 2.5 Pro agent → Gemini 2.5 Flash grader, up to 3 iterations)
+ * Logic:   Runs the APEX outcome loop (Gemini 3 Flash agent → Gemini 2.5 Flash grader, up to 3 iterations)
  *          If any BUY signal with confidence ≥ 65 found → send HTML email via Resend
  *
  * Required Worker Secrets (set in Cloudflare dashboard):
@@ -99,7 +99,7 @@ function normalizeSignals(signals, leverage) {
 
 // ── GEMINI API ────────────────────────────────────────────────────────────────
 async function callGemini(env, body, retries = 3) {
-  const { model = "gemini-2.5-pro", max_tokens, tools, messages = [] } = body;
+  const { model = "gemini-3.0-flash", max_tokens, tools, messages = [] } = body;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   const contents = messages.map(m => ({
@@ -160,7 +160,7 @@ async function generateSignals(env, budget, leverage) {
   for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     console.log(`[APEX] Outcome loop iteration ${iteration}/${MAX_ITERATIONS}`);
 
-    // ── AGENT (Gemini 2.5 Pro + Google Search grounding) ──
+    // ── AGENT (Gemini 3 Flash + Google Search grounding) ──
     const agentPrompt = `You are APEX Eagle, elite intraday day trading analyst. Today is ${dateStr} at ${timeStr}.
 Assets: ${ASSETS.join(", ")}
 Portfolio: ${fmt(budget)} | Risk: ${RISK_PCT}% per trade (AGGRESSIVE) | Max leverage: ${leverage}×

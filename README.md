@@ -2,7 +2,7 @@
 
 > AI-powered day trading co-pilot — with scheduled email alerts
 
-APEX Eagle is a React app that generates AI trade signals using live web search, institutional flow analysis, candlestick chart analysis, and an outcome-loop quality gate (Gemini 2.5 Pro agent + Gemini 2.5 Flash grader). The watchlist is fully user-managed — add or remove tickers, organize them into your own categories, and persist portfolio value and risk factor across sessions. It runs as a web app you use manually, **and** as a scheduled Cloudflare Worker that emails you BUY signals every Monday and Wednesday at 07:00 CET.
+APEX Eagle is a React app that generates AI trade signals using live web search, institutional flow analysis, candlestick chart analysis, and an outcome-loop quality gate (Gemini 3 Flash agent + Gemini 2.5 Flash grader). The watchlist is fully user-managed — add or remove tickers, organize them into your own categories, and persist portfolio value and risk factor across sessions. It runs as a web app you use manually, **and** as a scheduled Cloudflare Worker that emails you BUY signals every Monday and Wednesday at 07:00 CET.
 
 ---
 
@@ -12,7 +12,7 @@ APEX Eagle is a React app that generates AI trade signals using live web search,
 - Manage your own watchlist — add, remove, and group tickers into user-defined categories
 - Set portfolio budget, risk % (1–5%), and max leverage (up to 5×) — persisted in your browser
 - Hit Analyze → gets live prices, dark pool, options flow, institutional signals
-- Outcome loop: Gemini 2.5 Pro generates signals, Gemini 2.5 Flash grader verifies quality (up to 3 iterations)
+- Outcome loop: Gemini 3 Flash generates signals, Gemini 2.5 Flash grader verifies quality (up to 3 iterations)
 - Shows candlestick chart, RSI, SMA20/50, position sizing, SL/TP levels, sentiment summary
 
 **Scheduler (automatic)**
@@ -62,7 +62,7 @@ See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the condensed deployment guide and **
 | Cloudflare Pages | Free, unlimited bandwidth |
 | Cloudflare Worker + Cron | 100K req/day free, cron free |
 | Resend | 3,000 emails/month free |
-| Gemini API | Generous free tier + pay-as-you-go (~$0.02–0.10/run on 2.5 Pro) |
+| Gemini API | Generous free tier + pay-as-you-go (~$0.01–0.05/run on Flash models) |
 
 ---
 
@@ -70,7 +70,7 @@ See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the condensed deployment guide and **
 
 - **Frontend:** React 18 + Vite
 - **Charts:** HTML Canvas (no charting library)
-- **AI:** Google Gemini 2.5 Pro (signals + enrichment) · Gemini 2.5 Flash (grader)
+- **AI:** Google Gemini 3 Flash (signals + enrichment) · Gemini 2.5 Flash (grader)
 - **Auth:** Firebase Google OAuth
 - **Scheduler:** Cloudflare Worker + Cron Triggers
 - **Email:** Resend
