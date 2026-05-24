@@ -1,6 +1,6 @@
 # APEX Eagle 🦅
 
-> AI-powered day trading co-pilot for eToro — with scheduled email alerts
+> AI-powered day trading co-pilot — with scheduled email alerts
 
 APEX Eagle is a React app that generates AI trade signals using live web search, institutional flow analysis, candlestick chart analysis, and an outcome-loop quality gate (Gemini 2.5 Pro agent + Gemini 2.5 Flash grader). The watchlist is fully user-managed — add or remove tickers, organize them into your own categories, and persist portfolio value and risk factor across sessions. It runs as a web app you use manually, **and** as a scheduled Cloudflare Worker that emails you BUY signals every Monday and Wednesday at 07:00 CET.
 
@@ -80,4 +80,4 @@ See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the condensed deployment guide and **
 
 ## Risk disclosure
 
-AI signals are for informational purposes only. Day trading involves substantial risk of loss. Past performance does not guarantee future results. Never invest more than you can afford to lose. eToro does not provide a public trading API — all trades are executed manually.
+AI signals are for informational purposes only. Day trading involves substantial risk of loss. Past performance does not guarantee future results. Never invest more than you can afford to lose. All trades are executed manually on your broker of choice.

@@ -291,7 +291,7 @@ function LoginScreen({ onSignIn }) {
           <Eagle size={56} />
         </div>
         <div style={{ fontFamily: "'Syne', sans-serif", fontSize: "40px", fontWeight: "800", color: "#c8d0e0", letterSpacing: "0.2em", marginBottom: "8px" }}>APEX EAGLE</div>
-        <div style={{ fontSize: "11px", color: "#6a5fa8", letterSpacing: "0.2em", marginBottom: "36px" }}>AI TRADING CO-PILOT · eTORO</div>
+        <div style={{ fontSize: "11px", color: "#6a5fa8", letterSpacing: "0.2em", marginBottom: "36px" }}>AI TRADING CO-PILOT</div>
 
         <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: "10px", padding: "32px", marginBottom: "20px" }}>
           <p style={{ fontSize: "13px", color: C.text, lineHeight: "1.8", marginBottom: "28px" }}>
@@ -338,7 +338,7 @@ function LoginScreen({ onSignIn }) {
 
         <p style={{ fontSize: "10px", color: C.muted, lineHeight: "1.7" }}>
           AI signals are informational only. Day trading carries substantial risk.<br />
-          All trades are executed manually on the eToro platform.
+          Execute trades manually on your broker of choice.
         </p>
       </div>
     </div>
@@ -940,9 +940,9 @@ function SignalCard({ signal, leverage, budget, riskPct }) {
           </div>
 
           <div style={{ background: "rgba(0,229,255,0.04)", border: `1px solid rgba(0,229,255,0.15)`, borderRadius: 3, padding: "10px 12px" }}>
-            <div style={{ fontSize: 9, color: C.accent, textTransform: "uppercase", marginBottom: 6 }}>eToro Execution</div>
+            <div style={{ fontSize: 9, color: C.accent, textTransform: "uppercase", marginBottom: 6 }}>Execution Checklist</div>
             {[
-              "① Open eToro",
+              "① Open your broker",
               `② Search: ${signal.asset}`,
               "③ Tap TRADE",
               `④ Set ${fmt(pos.margin)} margin · ${signal.suggestedLeverage || leverage}× leverage`,

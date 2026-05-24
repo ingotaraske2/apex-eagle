@@ -341,9 +341,9 @@ function buildEmail(signals, sentiment, iterLog, budget, leverage, runDate) {
       </div>
 
       <div style="margin-top:14px;background:#0d111799;border:1px solid rgba(0,229,255,0.15);border-radius:4px;padding:12px;">
-        <div style="font-size:9px;color:#00e5ff;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px;">eToro Execution</div>
+        <div style="font-size:9px;color:#00e5ff;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px;">Execution Checklist</div>
         <div style="font-size:11px;color:#4a6070;line-height:2;">
-          ① Open eToro &nbsp;&nbsp;
+          ① Open your broker &nbsp;&nbsp;
           ② Search: <strong style="color:#c8d8e8;">${sig.asset}</strong> &nbsp;&nbsp;
           ③ <span style="color:#00e676;">Tap TRADE</span> &nbsp;&nbsp;
           ④ Set <strong style="color:#c8d8e8;">${fmt(pos.margin)}</strong> margin · <strong style="color:#ffd600;">${sig.suggestedLeverage || leverage}×</strong> leverage<br/>
@@ -427,7 +427,7 @@ function buildEmail(signals, sentiment, iterLog, budget, leverage, runDate) {
     <div style="font-size:10px;color:#4a6070;line-height:1.7;text-align:center;">
       ⚠ <strong style="color:#ffd600;">RISK DISCLOSURE</strong> — AI signals are for informational purposes only. Day trading involves substantial risk of loss. Past performance does not guarantee future results. Never invest more than you can afford to lose.<br/><br/>
       This email was generated automatically by APEX Eagle Scheduler on ${runDate}.<br/>
-      eToro does not provide a public trading API — execute trades manually on the eToro platform.
+      Execute trades manually on your broker of choice.
     </div>
   </div>
 
