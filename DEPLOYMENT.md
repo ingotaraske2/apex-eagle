@@ -73,13 +73,78 @@ No Google Cloud Console or OAuth client ID setup is required — Firebase handle
 
 ---
 
-## First-time use
+## Using the web app
 
-1. Open your Pages URL.
-2. Sign in with Google.
-3. Paste your Gemini API key (`AIza...`) — saved only in this browser's `localStorage`.
-4. Settings tab → add or remove tickers, create your own categories, set Portfolio Budget and Risk Per Trade (both persist).
-5. Tap **▶ ANALYZE NOW**.
+### Accessing the site
+
+- **Default URL:** `https://<your-pages-project>.pages.dev/` (Cloudflare assigns this when the Pages project is created — visible in the Pages dashboard).
+- **Path:** the entire app is served at the root path `/`. It's a single-page React app — Signals / Settings / Portfolio are in-app tabs (React state), not separate URL routes. There are no other paths on the Pages domain.
+- **Custom domain (optional):** Pages project → **Custom domains** → **Set up a custom domain** → follow the DNS instructions. HTTPS is provisioned automatically.
+- **Authorized domains:** every domain you serve from must be added in Firebase → **Authentication → Settings → Authorized domains**, otherwise Google sign-in will fail with `auth/unauthorized-domain`.
+
+> The only non-root path in the deployment is `GET /trigger` on the **Worker** subdomain (`*.workers.dev`) — see [Manual trigger](#manual-trigger). It is not on the Pages site.
+
+The app works on desktop and mobile browsers — the UI adapts to phone widths.
+
+### First-time setup (per browser)
+
+1. Open the URL and click **Sign in with Google** → choose your Google account in the popup.
+2. The app prompts for a Gemini API key. Grab one at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) (free tier is enough to start), paste it, click **Continue →**. It is validated against `gemini-2.5-flash` and then stored in `localStorage` — only this browser has it.
+3. You land on the Signals tab with an empty state. Bottom navigation:
+   - **📊 Signals** — current results + outcome-loop status
+   - **⚙️ Settings** — watchlist, budget, risk, leverage, key management
+   - **📋 Portfolio** — sentiment gauge, risk summary, signal history
+   - **▶ ANALYZE** — runs the analysis (also reachable from the empty state)
+
+### Managing your watchlist (Settings tab)
+
+The watchlist starts with two seeded categories — **AI** (`NVDA`, `MSFT`, `GOOGL`, `META`, `AMD`, `PLTR`, `SMCI`, `SOUN`) and **Energy & Commodities** (`XOM`, `CVX`, `COP`, `OXY`, `SLB`, `BP`, `FANG`, `Gold`, `CrudeOil`). Everything is editable:
+
+- **Toggle a ticker for analysis:** click the ticker pill. Cyan = selected, grey = available but not selected.
+- **Remove a ticker from a category:** click the small `✕` on the right side of the pill. If the ticker is in another category too, it stays available there; otherwise it disappears from your universe.
+- **Add a ticker:** type in the dashed `+ TICKER` input at the end of the row → press Enter or click **Add**. Input is auto-uppercased and deduped within the row.
+- **Rename a category:** click the category name (the `✎` icon hints at it) → type the new name.
+- **Delete a category:** click the `✕` button on the right side of the category header → confirm. Tickers that exist only in that category are removed from your universe.
+- **Add a new category:** click **+ Add category** at the bottom of the watchlist → enter a name.
+
+All changes save instantly to `localStorage`. Reloading the page restores categories, selection, budget, and risk exactly as you left them.
+
+### Setting portfolio parameters
+
+Below the watchlist:
+
+- **Portfolio Budget** — total capital in USD used for position sizing. Persists.
+- **Risk Per Trade** — `1%` Conservative · `2%` Moderate · `3%` Aggressive · `5%` High Risk. Persists.
+- **Max Leverage** — slider 1× to 5×. Not persisted (resets to 2× on reload — intentional safety default).
+
+The Analysis Summary panel underneath shows the count of selected assets, your current parameters, and the max loss per trade.
+
+### Running an analysis
+
+1. Make sure at least one ticker is selected (cyan pill).
+2. Tap **▶ ANALYZE NOW** in the Settings tab — or the **▶ ANALYZE** button in the bottom nav from any tab.
+3. A progress bar appears at the top of the screen. The outcome loop runs up to 3 iterations:
+   - **Gemini 2.5 Pro** generates signals using Google Search grounding for live prices, dark-pool prints, options flow, institutional bias, and recent news.
+   - **Gemini 2.5 Flash** grader scores the result against the 6-criterion rubric (opportunity found, confidence ≥65%, tight stop-loss, R:R ≥1.5, specific entry, valid current price).
+   - If the grader passes (or just the "goal met" criteria), iteration stops early.
+4. Results land on the **Signals** tab: one card per ticker with action (BUY/SELL/HOLD), confidence, suggested leverage, SL/TP percentages and price levels, RSI, SMA20/50, candlestick chart, position sizing, and reasoning.
+5. The **Portfolio** tab fills in with overall market sentiment, total margin in use, and a portfolio-at-risk bar.
+
+A typical run costs ~$0.02–0.10 in Gemini API usage and takes 20–60 seconds depending on iterations.
+
+### Updating your Gemini key
+
+Settings tab → **🔑 Update Gemini API Key** → paste a new key → **Save**. The old key is overwritten in `localStorage`.
+
+### Signing out
+
+Header → **Sign out** (top right). This clears the local Google session and your `localStorage` (user + Gemini key). Your watchlist, budget, and risk settings remain on this browser unless you also clear site data — they re-attach on next login.
+
+### Privacy & security notes
+
+- Your Gemini API key lives only in this browser's `localStorage`. It is sent directly to `generativelanguage.googleapis.com` — no APEX Eagle server sees it.
+- Anyone with access to this browser (devtools → Application → Local Storage) can read the key. Don't share a public Pages URL if you don't want strangers using their own keys on it.
+- Firebase Auth means Google sees your sign-in. The app stores your email, name, and avatar URL locally to display them — nothing more.
 
 ---
 
