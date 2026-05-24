@@ -196,7 +196,7 @@ async function signOutFirebase() {
 // data.content.filter(b => b.type === "text").map(b => b.text).join("").
 async function callApi(apiKey, body, retries = 3) {
   const {
-    model = "gemini-3.0-flash",
+    model = "gemini-3-flash-preview",
     max_tokens,
     tools,
     messages = [],
