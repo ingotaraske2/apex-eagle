@@ -1,0 +1,14 @@
+name = "apex-eagle-scheduler"
+main = "worker/scheduler.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# Cron triggers
+# 0 6 * * 1 = Monday    06:00 UTC = 07:00 CET (08:00 CEST in summer)
+# 0 6 * * 3 = Wednesday 06:00 UTC = 07:00 CET (08:00 CEST in summer)
+[triggers]
+crons = ["0 6 * * 1", "0 6 * * 3"]
+
+# Secrets — set via Cloudflare dashboard, never stored here:
+#   ANTHROPIC_API_KEY
+#   RESEND_API_KEY

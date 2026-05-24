@@ -1,0 +1,1415 @@
+import { useState, useRef, useEffect, useCallback } from "react";
+
+// ── AUTH CONFIG ────────────────────────────────────────────────────────────────
+// Firebase config — replace with values from Firebase Console:
+// console.firebase.google.com → your project → Project settings → Your apps → SDK setup
+// No Google Cloud Console or OAuth app registration needed.
+const FIREBASE_CONFIG = {
+  apiKey:     import.meta.env.VITE_FIREBASE_API_KEY     || "YOUR_FIREBASE_API_KEY",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "YOUR_PROJECT.firebaseapp.com",
+  projectId:  import.meta.env.VITE_FIREBASE_PROJECT_ID  || "YOUR_PROJECT_ID",
+  appId:      import.meta.env.VITE_FIREBASE_APP_ID      || "YOUR_APP_ID",
+};
+
+// ingo.taraske@gmail.com uses embedded key — all other users supply their own
+const SPECIAL_USER_EMAIL   = "ingo.taraske@gmail.com";
+const SPECIAL_USER_API_KEY = import.meta.env.VITE_SPECIAL_USER_KEY || "";
+
+// ── CONSTANTS ─────────────────────────────────────────────────────────────────
+const AI_ASSETS = [
+  { id: "NVDA", label: "NVDA" }, { id: "MSFT", label: "MSFT" },
+  { id: "GOOGL", label: "GOOGL" }, { id: "META", label: "META" },
+  { id: "AMD", label: "AMD" }, { id: "PLTR", label: "PLTR" },
+  { id: "SMCI", label: "SMCI" }, { id: "SOUN", label: "SOUN" },
+];
+const ENERGY_ASSETS = [
+  { id: "XOM", label: "XOM" }, { id: "CVX", label: "CVX" },
+  { id: "COP", label: "COP" }, { id: "OXY", label: "OXY" },
+  { id: "SLB", label: "SLB" }, { id: "BP", label: "BP" },
+  { id: "FANG", label: "FANG" }, { id: "Gold", label: "GOLD" },
+  { id: "CrudeOil", label: "OIL" },
+];
+const RISK_OPTIONS = [
+  { value: 1, label: "1% Conservative" }, { value: 2, label: "2% Moderate" },
+  { value: 3, label: "3% Aggressive" }, { value: 5, label: "5% High Risk" },
+];
+const SL_CAPS = {
+  MSFT: 2.0, GOOGL: 2.0, META: 2.5, NVDA: 2.5, AMD: 2.5,
+  SMCI: 3.0, SOUN: 3.5, PLTR: 2.5, XOM: 1.5, CVX: 1.5,
+  COP: 1.8, OXY: 2.0, SLB: 1.8, BP: 1.5, FANG: 2.0,
+  Gold: 1.2, CrudeOil: 2.0, DEFAULT: 2.5,
+};
+const C = {
+  bg: "#070a0f", surface: "#0d1117", panel: "#111820",
+  border: "#1e2d3d", accent: "#00e5ff", buy: "#00e676",
+  sell: "#ff3d71", hold: "#ffd600", gold: "#ffd600",
+  text: "#c8d8e8", muted: "#4a6070", inst: "#6a82d4",
+};
+const OUTCOME_RUBRIC = `## APEX Eagle — Investment Opportunity Rubric
+GOAL: Find at least one actionable BUY or SELL signal with confidence >= 65%.
+[C1] Opportunity found — at least one signal has action BUY or SELL (not all HOLD)
+[C2] Confidence threshold — at least one BUY/SELL has confidence >= 65
+[C3] Stop loss discipline — every BUY/SELL has stopLossNote with a specific price level
+[C4] Risk/reward viability — every BUY/SELL has takeProfitPct >= 1.5 x stopLossPct
+[C5] Entry specificity — entryNote references a specific price level or pattern trigger
+[C6] Current price — every signal has a numeric currentPrice > 0
+Grade each criterion PASS or FAIL. If any fail, explain exactly what the agent must fix.`;
+
+// ── UTILS ─────────────────────────────────────────────────────────────────────
+const fmt = n => "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const actionColor = a => a === "BUY" ? C.buy : a === "SELL" ? C.sell : C.hold;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function calcPositionSize(budget, riskPct, slPct, leverage) {
+  const riskAmount = budget * (riskPct / 100);
+  const slDecimal = Math.abs(slPct) / 100;
+  const positionSize = slDecimal > 0 ? riskAmount / slDecimal : budget * 0.1;
+  const capped = Math.min(positionSize, budget * 0.4);
+  return { riskAmount, positionSize: capped, margin: capped / leverage };
+}
+
+function calcSMA(closes, period) {
+  return closes.map((_, i) =>
+    i < period - 1 ? null : closes.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0) / period
+  );
+}
+
+function calcRSI(closes, period = 14) {
+  return closes.map((_, i) => {
+    if (i < period) return null;
+    let g = 0, l = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      const d = closes[j] - closes[j - 1];
+      d > 0 ? (g += d) : (l -= d);
+    }
+    return 100 - 100 / (1 + (l === 0 ? 100 : g / l));
+  });
+}
+
+function repairJson(str) {
+  let s = str.trim().replace(/```json|```/gi, "").trim();
+  const opens = { "[": 0, "{": 0 };
+  for (const ch of s) {
+    if (ch === "[" || ch === "{") opens[ch]++;
+    if (ch === "]") { if (opens["["] > 0) opens["["]--; }
+    if (ch === "}") { if (opens["{"] > 0) opens["{"]--; }
+  }
+  s = s.replace(/,\s*$/, "");
+  if (opens["["]) s += "]".repeat(opens["["]);
+  if (opens["{"]) s += "}".repeat(opens["{"]);
+  return s;
+}
+
+function safeParseJson(text, fallback = null) {
+  if (!text) return fallback;
+  try { return JSON.parse(text); } catch { /* continue */ }
+  const om = text.match(/\{[\s\S]*\}/);
+  if (om) {
+    try { return JSON.parse(om[0]); } catch { /* continue */ }
+    try { return JSON.parse(repairJson(om[0])); } catch { /* continue */ }
+  }
+  const am = text.match(/\[[\s\S]*\]/);
+  if (am) {
+    try { return JSON.parse(am[0]); } catch { /* continue */ }
+    try { return JSON.parse(repairJson(am[0])); } catch { /* continue */ }
+  }
+  return fallback;
+}
+
+function generateFallbackOHLCV(basePrice = 100, trend = "SIDEWAYS", n = 20) {
+  const candles = [];
+  let price = basePrice * (trend === "UPTREND" ? 0.92 : trend === "DOWNTREND" ? 1.08 : 0.97);
+  const drift = trend === "UPTREND" ? 0.004 : trend === "DOWNTREND" ? -0.004 : 0.001;
+  for (let i = 0; i < n; i++) {
+    const vol = 0.012 + Math.random() * 0.018;
+    const o = price;
+    const c = o * (1 + drift + (Math.random() - 0.48) * vol);
+    candles.push({
+      o: +o.toFixed(4),
+      h: +(Math.max(o, c) * (1 + Math.random() * 0.008)).toFixed(4),
+      l: +(Math.min(o, c) * (1 - Math.random() * 0.008)).toFixed(4),
+      c: +c.toFixed(4),
+      v: Math.round(30 + Math.random() * 70),
+    });
+    price = c;
+  }
+  if (candles.length) {
+    const last = candles[candles.length - 1];
+    last.c = basePrice;
+    last.h = Math.max(last.h, basePrice);
+    last.l = Math.min(last.l, basePrice);
+  }
+  return candles;
+}
+
+// ── FIREBASE AUTH ─────────────────────────────────────────────────────────────
+// Loads Firebase SDK dynamically — no npm install needed, works in plain browser/Vite.
+let _firebaseAuth = null;
+
+async function getFirebaseAuth() {
+  if (_firebaseAuth) return _firebaseAuth;
+  const { initializeApp, getApps } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+  const { getAuth } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+  const app = getApps().length ? getApps()[0] : initializeApp(FIREBASE_CONFIG);
+  _firebaseAuth = getAuth(app);
+  return _firebaseAuth;
+}
+
+async function signInWithGoogle() {
+  const { GoogleAuthProvider, signInWithPopup } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+  const auth = await getFirebaseAuth();
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: "select_account" });
+  const result = await signInWithPopup(auth, provider);
+  const u = result.user;
+  return { email: u.email, name: u.displayName, picture: u.photoURL };
+}
+
+async function signOutFirebase() {
+  const { signOut } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+  const auth = await getFirebaseAuth();
+  await signOut(auth);
+}
+
+// ── API (with retry + per-call apiKey injection) ───────────────────────────────
+async function callApi(apiKey, body, retries = 3) {
+  const { model = "claude-sonnet-4-20250514", ...rest } = body;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify({ model, ...rest }),
+      });
+      if ([500, 503, 529].includes(res.status)) {
+        if (attempt < retries) { await sleep(1500 * Math.pow(2, attempt)); continue; }
+        throw new Error(`Server error (${res.status}). Try again.`);
+      }
+      if (res.status === 429) {
+        if (attempt < retries) { await sleep(3000 * Math.pow(2, attempt)); continue; }
+        throw new Error("Rate limited. Wait a few seconds.");
+      }
+      if (res.status === 401) throw new Error("Invalid API key. Check your Anthropic key in Settings.");
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message || "API error");
+      return data;
+    } catch (err) {
+      if (attempt < retries && !err.message.includes("Rate limited") && !err.message.includes("Invalid API key")) {
+        await sleep(1000 * Math.pow(2, attempt));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+// ── EAGLE SVG ─────────────────────────────────────────────────────────────────
+function Eagle({ size = 44 }) {
+  return (
+    <svg width={size} height={size * 0.775} viewBox="0 0 160 124" fill="none">
+      <path d="M80 58 C65 48 42 34 4 18 C16 36 34 48 54 56 Z" fill="#6a82d4" />
+      <path d="M80 58 C65 50 44 42 14 36 C28 50 46 56 62 60 Z" fill="#7b6bb8" />
+      <path d="M80 58 C70 54 54 50 36 52 C46 60 62 64 74 64 Z" fill="#5f5498" />
+      <path d="M80 58 C95 48 118 34 156 18 C144 36 126 48 106 56 Z" fill="#6a82d4" />
+      <path d="M80 58 C95 50 116 42 146 36 C132 50 114 56 98 60 Z" fill="#7b6bb8" />
+      <path d="M80 58 C90 54 106 50 124 52 C114 60 98 64 86 64 Z" fill="#5f5498" />
+      <path d="M80 36 C74 44 72 56 72 68 C72 82 74 96 80 112 C86 96 88 82 88 68 C88 56 86 44 80 36 Z" fill="#7a1e45" />
+      <path d="M80 38 C78 48 77 58 77 70 C77 82 78 94 80 108 C82 94 83 82 83 70 C83 58 82 48 80 38 Z" fill="#5a1530" />
+      <ellipse cx="80" cy="33" rx="9" ry="11" fill="#7a1e45" />
+      <path d="M80 28 C84 26 89 28 88 31 C85 32 82 32 80 30 Z" fill="#b03030" />
+      <circle cx="83" cy="30" r="2" fill="#0d0608" />
+      <circle cx="83.7" cy="29.3" r="0.6" fill="#fff" opacity="0.5" />
+      <path d="M75 108 C72 116 68 122 65 124 L80 118 L95 124 C92 122 88 116 85 108 Z" fill="#7a1e45" />
+      <path d="M78 110 C76 118 74 122 72 124 L80 120 L88 124 C86 122 84 118 82 110 Z" fill="#5a1530" />
+    </svg>
+  );
+}
+
+// ── LOGIN SCREEN ───────────────────────────────────────────────────────────────
+function LoginScreen({ onSignIn }) {
+  const [loading, setLoading] = useState(false);
+  const [authError, setAuthError] = useState(null);
+
+  const handleGoogleSignIn = async () => {
+    setLoading(true);
+    setAuthError(null);
+    try {
+      const userData = await signInWithGoogle();
+      onSignIn(userData);
+    } catch (err) {
+      // User closed popup or Firebase not configured yet
+      if (err.code === "auth/popup-closed-by-user" || err.code === "auth/cancelled-popup-request") {
+        setAuthError(null); // silent
+      } else if (err.code === "auth/configuration-not-found" || !FIREBASE_CONFIG.apiKey.startsWith("AIza")) {
+        setAuthError("Firebase is not configured yet. Replace FIREBASE_CONFIG in App.jsx with your project values.");
+      } else {
+        setAuthError(err.message || "Sign-in failed. Please try again.");
+      }
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ background: C.bg, color: C.text, fontFamily: "'Space Mono', monospace", minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "20px" }}>
+      <GlobalStyles />
+      <div style={{ textAlign: "center", width: "100%", maxWidth: "460px" }}>
+        <div style={{ marginBottom: 32 }}>
+          <Eagle size={56} />
+        </div>
+        <div style={{ fontFamily: "'Syne', sans-serif", fontSize: "40px", fontWeight: "800", color: "#c8d0e0", letterSpacing: "0.2em", marginBottom: "8px" }}>APEX EAGLE</div>
+        <div style={{ fontSize: "11px", color: "#6a5fa8", letterSpacing: "0.2em", marginBottom: "36px" }}>AI TRADING CO-PILOT · eTORO</div>
+
+        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: "10px", padding: "32px", marginBottom: "20px" }}>
+          <p style={{ fontSize: "13px", color: C.text, lineHeight: "1.8", marginBottom: "28px" }}>
+            Sign in with your Google account to get started. Everyone can use APEX Eagle — you just need a free{" "}
+            <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" style={{ color: C.accent }}>Anthropic API key</a>.
+          </p>
+
+          <button
+            onClick={handleGoogleSignIn}
+            disabled={loading}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 12,
+              width: "100%", padding: "12px 20px",
+              background: loading ? "#1a1a2e" : "#fff",
+              color: "#1f1f1f", border: "none", borderRadius: 6,
+              fontFamily: "'Roboto', sans-serif", fontSize: 15, fontWeight: 500,
+              cursor: loading ? "not-allowed" : "pointer",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
+              transition: "opacity 0.2s",
+              opacity: loading ? 0.7 : 1,
+            }}
+          >
+            {loading ? (
+              <span style={{ color: C.muted, fontFamily: "'Space Mono', monospace", fontSize: 12 }}>Signing in…</span>
+            ) : (
+              <>
+                <svg width="20" height="20" viewBox="0 0 48 48">
+                  <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+                  <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+                  <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+                  <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+                </svg>
+                Sign in with Google
+              </>
+            )}
+          </button>
+
+          {authError && (
+            <p style={{ fontSize: "11px", color: C.sell, marginTop: 14, lineHeight: 1.6 }}>
+              ⚠ {authError}
+            </p>
+          )}
+        </div>
+
+        <p style={{ fontSize: "10px", color: C.muted, lineHeight: "1.7" }}>
+          AI signals are informational only. Day trading carries substantial risk.<br />
+          All trades are executed manually on the eToro platform.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── API KEY PROMPT ─────────────────────────────────────────────────────────────
+function ApiKeyPrompt({ user, onSetKey, onLogout }) {
+  const [keyInput, setKeyInput] = useState("");
+  const [validating, setValidating] = useState(false);
+  const [keyError, setKeyError] = useState(null);
+
+  const handleSubmit = async () => {
+    const trimmed = keyInput.trim();
+    if (!trimmed) { setKeyError("Please enter your Anthropic API key."); return; }
+    if (!trimmed.startsWith("sk-ant-")) { setKeyError("That doesn't look like an Anthropic key (should start with sk-ant-)."); return; }
+    setKeyError(null);
+    setValidating(true);
+    try {
+      // Quick validation ping — small cheap request
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": trimmed,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 10,
+          messages: [{ role: "user", content: "ping" }],
+        }),
+      });
+      if (res.status === 401) { setKeyError("Invalid API key — Anthropic rejected it. Double-check your key."); setValidating(false); return; }
+      onSetKey(trimmed);
+    } catch {
+      // Network error — accept key anyway, will fail later with a clear message
+      onSetKey(trimmed);
+    }
+    setValidating(false);
+  };
+
+  return (
+    <div style={{ background: C.bg, color: C.text, fontFamily: "'Space Mono', monospace", minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "20px" }}>
+      <GlobalStyles />
+      <div style={{ width: "100%", maxWidth: "460px" }}>
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
+          {user.picture && <img src={user.picture} alt="" style={{ width: 52, height: 52, borderRadius: "50%", border: `2px solid ${C.border}`, marginBottom: 12 }} />}
+          <div style={{ fontFamily: "'Syne', sans-serif", fontSize: "22px", fontWeight: "800", color: C.accent }}>Welcome, {user.name}!</div>
+          <div style={{ fontSize: "11px", color: C.muted, marginTop: 4 }}>{user.email}</div>
+        </div>
+
+        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: "10px", padding: "28px" }}>
+          <p style={{ fontSize: "13px", color: C.text, lineHeight: "1.8", marginBottom: "20px" }}>
+            Enter your <strong>Anthropic API key</strong>. It is saved only in your browser's localStorage and is sent exclusively to Anthropic's API — never to any other server.
+          </p>
+
+          <input
+            type="password"
+            value={keyInput}
+            onChange={e => { setKeyInput(e.target.value); setKeyError(null); }}
+            placeholder="sk-ant-api03-…"
+            autoFocus
+            style={{
+              width: "100%", padding: "12px", border: `1px solid ${keyError ? C.sell : C.border}`,
+              background: C.surface, color: C.accent, borderRadius: "4px",
+              fontFamily: "'Space Mono', monospace", fontSize: "12px",
+              marginBottom: "8px", outline: "none", boxSizing: "border-box",
+            }}
+            onKeyDown={e => e.key === "Enter" && !validating && handleSubmit()}
+          />
+
+          {keyError && <p style={{ fontSize: "11px", color: C.sell, marginBottom: "12px", lineHeight: 1.5 }}>⚠ {keyError}</p>}
+
+          <button
+            onClick={handleSubmit}
+            disabled={validating}
+            style={{
+              width: "100%", padding: "12px", background: validating ? C.muted : C.accent,
+              color: "#000", border: "none", borderRadius: "4px",
+              fontFamily: "'Syne', sans-serif", fontWeight: "700", fontSize: "14px",
+              cursor: validating ? "not-allowed" : "pointer", marginBottom: "12px",
+            }}
+          >
+            {validating ? "Validating…" : "Continue →"}
+          </button>
+
+          <button
+            onClick={onLogout}
+            style={{
+              width: "100%", padding: "10px", background: "transparent", color: C.muted,
+              border: `1px solid ${C.border}`, borderRadius: "4px",
+              fontFamily: "'Space Mono', monospace", fontSize: "12px", cursor: "pointer",
+            }}
+          >
+            ← Sign out
+          </button>
+
+          <p style={{ fontSize: "10px", color: C.muted, marginTop: "16px", lineHeight: "1.7" }}>
+            Get your key at <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" style={{ color: C.accent }}>console.anthropic.com</a> → API Keys.<br />
+            Set a monthly spend limit in Settings to cap costs.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── GLOBAL STYLES ──────────────────────────────────────────────────────────────
+function GlobalStyles() {
+  return (
+    <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap');
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      ::-webkit-scrollbar { width: 3px; }
+      ::-webkit-scrollbar-thumb { background: #1e2d3d; }
+      input[type=range] { -webkit-appearance: none; height: 3px; background: #1e2d3d; border-radius: 2px; outline: none; width: 100%; }
+      input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #ffd600; box-shadow: 0 0 8px #ffd600; cursor: pointer; }
+      input[type=number] { background: #111820; border: 1px solid #1e2d3d; color: #39ff14; font-family: monospace; font-size: 13px; font-weight: 700; padding: 6px 10px; width: 100%; border-radius: 3px; outline: none; }
+      select { background: #111820; border: 1px solid #1e2d3d; color: #ffd600; font-family: monospace; font-size: 12px; padding: 7px 8px; border-radius: 3px; outline: none; width: 100%; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+      @keyframes progress { 0% { width: 0%; margin-left: 0; } 50% { width: 60%; margin-left: 20%; } 100% { width: 0%; margin-left: 100%; } }
+      @keyframes eaglePulse { 0%, 100% { filter: drop-shadow(0 0 4px rgba(106,130,212,0.3)); } 50% { filter: drop-shadow(0 0 12px rgba(106,130,212,0.8)); } }
+      .eagle-anim { animation: eaglePulse 3s ease-in-out infinite; }
+      button:active { opacity: 0.85; }
+      a { color: inherit; }
+    `}</style>
+  );
+}
+
+// ── TRADING CHART ─────────────────────────────────────────────────────────────
+function TradingChart({ signal }) {
+  const priceRef = useRef(null);
+  const rsiRef = useRef(null);
+
+  const draw = useCallback(() => {
+    const ohlcv = signal.ohlcv;
+    if (!ohlcv || ohlcv.length < 5) return;
+    const closes = ohlcv.map(c => c.c);
+    const sma20 = calcSMA(closes, 20);
+    const sma50 = calcSMA(closes, 50);
+    const rsiArr = calcRSI(closes, 14);
+
+    // Price canvas
+    const canvas = priceRef.current;
+    if (!canvas) return;
+    const DPR = window.devicePixelRatio || 1;
+    const W = canvas.offsetWidth || 340;
+    const H = 160;
+    canvas.width = W * DPR;
+    canvas.height = H * DPR;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(DPR, DPR);
+    const pad = { top: 10, right: 8, bottom: 18, left: 52 };
+    const cw = W - pad.left - pad.right;
+    const ch = H - pad.top - pad.bottom;
+    const cp = signal.currentPrice || closes[closes.length - 1];
+    const slP = cp * (1 - (signal.stopLossPct || 3) / 100);
+    const tpP = cp * (1 + (signal.takeProfitPct || 6) / 100);
+    const allP = [...ohlcv.flatMap(c => [c.h, c.l]), slP, tpP];
+    const minP = Math.min(...allP) * 0.998;
+    const maxP = Math.max(...allP) * 1.002;
+    const pr = maxP - minP;
+    const xS = i => pad.left + (i / (ohlcv.length - 1)) * cw;
+    const yS = p => pad.top + ch - ((p - minP) / pr) * ch;
+
+    ctx.fillStyle = "#080c12";
+    ctx.fillRect(0, 0, W, H);
+
+    for (let i = 0; i <= 3; i++) {
+      const y = pad.top + (ch / 3) * i;
+      ctx.strokeStyle = "#1e2d3d44";
+      ctx.lineWidth = 0.5;
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(W - pad.right, y);
+      ctx.stroke();
+      ctx.fillStyle = "#4a6070";
+      ctx.font = "8px monospace";
+      ctx.textAlign = "right";
+      ctx.fillText((maxP - (pr / 3) * i).toFixed(maxP > 100 ? 1 : 3), pad.left - 2, y + 3);
+    }
+
+    const dashed = (p, col, lbl) => {
+      ctx.strokeStyle = col;
+      ctx.setLineDash([3, 3]);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(pad.left, yS(p));
+      ctx.lineTo(W - pad.right, yS(p));
+      ctx.stroke();
+      ctx.fillStyle = col;
+      ctx.font = "bold 8px monospace";
+      ctx.textAlign = "right";
+      ctx.fillText(lbl, pad.left - 1, yS(p) + 3);
+      ctx.setLineDash([]);
+    };
+    dashed(slP, "rgba(255,61,113,0.8)", "SL");
+    dashed(tpP, "rgba(0,230,118,0.8)", "TP");
+
+    const maxVol = Math.max(...ohlcv.map(c => c.v || 50));
+    const bW = Math.max(1, cw / ohlcv.length - 1);
+    ohlcv.forEach((c, i) => {
+      const x = pad.left + (i / ohlcv.length) * cw + bW * 0.1;
+      ctx.fillStyle = c.c >= c.o ? "rgba(0,230,118,0.15)" : "rgba(255,61,113,0.15)";
+      ctx.fillRect(x, pad.top + ch - (c.v || 50) / maxVol * ch * 0.15, bW, (c.v || 50) / maxVol * ch * 0.15);
+    });
+
+    const drawLine = (data, col) => {
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      let first = true;
+      data.forEach((v, i) => {
+        if (v == null) return;
+        first ? ctx.moveTo(xS(i), yS(v)) : ctx.lineTo(xS(i), yS(v));
+        first = false;
+      });
+      ctx.stroke();
+    };
+    drawLine(sma50, "rgba(255,214,0,0.7)");
+    drawLine(sma20, "rgba(0,229,255,0.85)");
+
+    ohlcv.forEach((c, i) => {
+      const x = pad.left + (i / ohlcv.length) * cw + bW * 0.1;
+      const cx2 = x + bW / 2;
+      const isUp = c.c >= c.o;
+      ctx.strokeStyle = isUp ? "#00e676" : "#ff3d71";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx2, yS(c.h));
+      ctx.lineTo(cx2, yS(c.l));
+      ctx.stroke();
+      ctx.fillStyle = isUp ? "rgba(0,230,118,0.85)" : "rgba(255,61,113,0.85)";
+      const top = yS(Math.max(c.o, c.c));
+      const ht = Math.max(1, yS(Math.min(c.o, c.c)) - top);
+      ctx.fillRect(x, top, bW, ht);
+    });
+
+    ctx.strokeStyle = "rgba(0,229,255,0.9)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 2]);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, yS(cp));
+    ctx.lineTo(W - pad.right, yS(cp));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#00e5ff";
+    ctx.font = "bold 8px monospace";
+    ctx.textAlign = "right";
+    ctx.fillText("$" + cp.toLocaleString(undefined, { maximumFractionDigits: 2 }), pad.left - 1, yS(cp) + 3);
+
+    // RSI canvas
+    const rc2 = rsiRef.current;
+    if (!rc2) return;
+    const RW = rc2.offsetWidth || 340;
+    const RH = 50;
+    rc2.width = RW * DPR;
+    rc2.height = RH * DPR;
+    const rc = rc2.getContext("2d");
+    rc.scale(DPR, DPR);
+    const rp = { top: 4, right: 8, bottom: 12, left: 52 };
+    const rcw = RW - rp.left - rp.right;
+    const rch = RH - rp.top - rp.bottom;
+    rc.fillStyle = "#080c12";
+    rc.fillRect(0, 0, RW, RH);
+
+    [30, 70].forEach(lvl => {
+      const y = rp.top + rch - (lvl / 100) * rch;
+      rc.strokeStyle = lvl === 70 ? "rgba(0,230,118,0.2)" : "rgba(255,61,113,0.2)";
+      rc.lineWidth = 0.5;
+      rc.setLineDash([3, 3]);
+      rc.beginPath();
+      rc.moveTo(rp.left, y);
+      rc.lineTo(RW - rp.right, y);
+      rc.stroke();
+      rc.setLineDash([]);
+      rc.fillStyle = lvl === 70 ? "#00e676" : "#ff3d71";
+      rc.font = "7px monospace";
+      rc.textAlign = "right";
+      rc.fillText(lvl, rp.left - 2, y + 2);
+    });
+
+    const rv = rsiArr.map((v, i) => (v != null ? { v, i } : null)).filter(Boolean);
+    if (rv.length > 1) {
+      rc.beginPath();
+      rv.forEach(({ v, i }, idx) => {
+        const x = rp.left + (i / (ohlcv.length - 1)) * rcw;
+        const y = rp.top + rch - (v / 100) * rch;
+        idx === 0 ? rc.moveTo(x, y) : rc.lineTo(x, y);
+      });
+      rc.strokeStyle = "#c084fc";
+      rc.lineWidth = 1.5;
+      rc.stroke();
+      const lr = rv[rv.length - 1].v;
+      rc.fillStyle = lr > 70 ? "#ff3d71" : lr < 30 ? "#00e676" : "#c084fc";
+      rc.font = "bold 8px monospace";
+      rc.textAlign = "right";
+      rc.fillText("RSI " + lr.toFixed(0), rp.left - 2, rp.top + rch - (lr / 100) * rch + 3);
+    }
+  }, [signal]);
+
+  useEffect(() => { const t = setTimeout(draw, 60); return () => clearTimeout(t); }, [draw]);
+  useEffect(() => {
+    const ro = new ResizeObserver(() => draw());
+    if (priceRef.current) ro.observe(priceRef.current);
+    return () => ro.disconnect();
+  }, [draw]);
+
+  return (
+    <div style={{ background: "#080c12", border: `1px solid ${C.border}`, borderRadius: 4, overflow: "hidden", marginTop: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", borderBottom: `1px solid ${C.border}`, background: "rgba(0,0,0,0.3)" }}>
+        <span style={{ fontSize: 9, color: C.muted }}>📈 {signal.asset} · 20D</span>
+        <div style={{ display: "flex", gap: 10, fontSize: 8 }}>
+          {[["#00e5ff", "SMA20"], ["#ffd600", "SMA50"], ["#c084fc", "RSI"]].map(([col, lbl]) => (
+            <span key={lbl}>
+              <span style={{ display: "inline-block", width: 6, height: 2, background: col, verticalAlign: "middle", marginRight: 3 }} />
+              <span style={{ color: C.muted }}>{lbl}</span>
+            </span>
+          ))}
+        </div>
+      </div>
+      <canvas ref={priceRef} style={{ display: "block", width: "100%", height: 160 }} />
+      <canvas ref={rsiRef} style={{ display: "block", width: "100%", height: 50, borderTop: `1px solid ${C.border}` }} />
+      <div style={{ display: "flex", gap: 10, padding: "5px 10px", borderTop: `1px solid ${C.border}`, fontSize: 9, flexWrap: "wrap", background: "rgba(0,0,0,0.2)" }}>
+        <span style={{ color: C.muted }}>PATTERN: <span style={{ color: C.accent }}>{signal.patterns || "—"}</span></span>
+        <span style={{ color: C.muted }}>TREND: <span style={{ color: signal.trend === "UPTREND" ? C.buy : signal.trend === "DOWNTREND" ? C.sell : C.hold }}>{signal.trend === "UPTREND" ? "↑" : signal.trend === "DOWNTREND" ? "↓" : "→"} {signal.trend || "—"}</span></span>
+        <span style={{ color: C.muted }}>RSI: <span style={{ color: (signal.rsi || 50) > 70 ? C.sell : (signal.rsi || 50) < 30 ? C.buy : C.text }}>{(signal.rsi || 50).toFixed(0)}{(signal.rsi || 50) > 70 ? " ⚠" : (signal.rsi || 50) < 30 ? " ⚡" : ""}</span></span>
+      </div>
+    </div>
+  );
+}
+
+// ── INSTITUTIONAL FLOW PANEL ──────────────────────────────────────────────────
+function InstitutionalPanel({ flow }) {
+  if (!flow) return null;
+  const biasColor = flow.overallBias === "ACCUMULATING" ? C.buy : flow.overallBias === "DISTRIBUTING" ? C.sell : C.muted;
+  const score = flow.flowScore ?? null;
+  const scoreColor = score >= 65 ? C.buy : score <= 35 ? C.sell : C.hold;
+  const badge = (sig, label) => {
+    if (!sig || sig === "NO_DATA" || sig === "NEUTRAL") return null;
+    const col = ["BULLISH", "INFLOW", "BUYING"].includes(sig) ? C.buy : ["BEARISH", "OUTFLOW", "SELLING"].includes(sig) ? C.sell : C.muted;
+    return <span key={label} style={{ fontSize: 8, padding: "2px 7px", border: `1px solid ${col}`, borderRadius: 2, color: col }}>{label}: {sig}</span>;
+  };
+
+  return (
+    <div style={{ border: `1px solid rgba(106,130,212,0.4)`, borderRadius: 4, overflow: "hidden", background: "rgba(106,130,212,0.04)" }}>
+      <div style={{ padding: "10px 12px", background: "rgba(106,130,212,0.1)", borderBottom: `1px solid rgba(106,130,212,0.25)`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <div style={{ fontSize: 9, color: C.inst, textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 700, marginBottom: 3 }}>🏛 Institutional Flow</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: biasColor }}>
+            {flow.overallBias === "ACCUMULATING" ? "▲" : flow.overallBias === "DISTRIBUTING" ? "▼" : "—"} {flow.overallBias || "NO DATA"}
+          </div>
+        </div>
+        {score != null && (
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 8, color: C.muted, marginBottom: 2 }}>FLOW SCORE</div>
+            <div style={{ fontFamily: "Syne,sans-serif", fontSize: 24, fontWeight: 800, color: scoreColor, lineHeight: 1 }}>{score}</div>
+            <div style={{ height: 3, width: 48, background: C.border, borderRadius: 2, marginTop: 3, overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${score}%`, background: scoreColor }} />
+            </div>
+          </div>
+        )}
+      </div>
+      <div style={{ padding: "8px 12px", display: "flex", gap: 6, flexWrap: "wrap", borderBottom: `1px solid rgba(106,130,212,0.15)` }}>
+        {badge(flow.darkPool?.signal, "🌑 DARK POOL")}
+        {badge(flow.optionsFlow?.signal, "📊 OPTIONS")}
+        {badge(flow.insiderActivity?.signal, "👤 INSIDER")}
+        {badge(flow.etfFlow?.signal, "📦 ETF")}
+      </div>
+      <div style={{ padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+        {flow.darkPool?.detail && flow.darkPool.detail !== "NO_DATA" && (
+          <div>
+            <div style={{ fontSize: 8, color: C.inst, textTransform: "uppercase", marginBottom: 3 }}>🌑 Dark Pool Prints</div>
+            <div style={{ fontSize: 10, color: C.text, lineHeight: 1.5 }}>{flow.darkPool.detail}</div>
+            {(flow.darkPool.recentPrints || []).filter(p => p && p !== "NO_DATA").map((p, i) => (
+              <div key={i} style={{ fontSize: 9, color: C.muted, marginTop: 2 }}>• {p}</div>
+            ))}
+          </div>
+        )}
+        {flow.optionsFlow?.unusualActivity && flow.optionsFlow.unusualActivity !== "NO_DATA" && (
+          <div>
+            <div style={{ fontSize: 8, color: C.inst, textTransform: "uppercase", marginBottom: 3 }}>📊 Options Flow</div>
+            <div style={{ fontSize: 10, color: C.text, lineHeight: 1.5 }}>{flow.optionsFlow.unusualActivity}</div>
+            {flow.optionsFlow.putCallRatio && flow.optionsFlow.putCallRatio !== "N/A" && (
+              <div style={{ fontSize: 9, color: C.muted, marginTop: 2 }}>Put/Call: {flow.optionsFlow.putCallRatio}</div>
+            )}
+          </div>
+        )}
+        {flow.insiderActivity?.detail && flow.insiderActivity.signal !== "NO_RECENT" && flow.insiderActivity.detail !== "NO_DATA" && (
+          <div>
+            <div style={{ fontSize: 8, color: C.inst, textTransform: "uppercase", marginBottom: 3 }}>👤 Insider Activity</div>
+            <div style={{ fontSize: 10, color: C.text, lineHeight: 1.5 }}>{flow.insiderActivity.detail}</div>
+          </div>
+        )}
+        {flow.etfFlow?.detail && flow.etfFlow.detail !== "NO_DATA" && (
+          <div>
+            <div style={{ fontSize: 8, color: C.inst, textTransform: "uppercase", marginBottom: 3 }}>📦 ETF Flow</div>
+            <div style={{ fontSize: 10, color: C.text, lineHeight: 1.5 }}>{flow.etfFlow.detail}</div>
+          </div>
+        )}
+        {(flow.institutionalOwnership || flow["13fChange"]) && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {flow.institutionalOwnership && (
+              <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 3, padding: "7px 9px" }}>
+                <div style={{ fontSize: 8, color: C.inst, textTransform: "uppercase", marginBottom: 3 }}>Inst. Ownership</div>
+                <div style={{ fontSize: 10, color: C.text }}>{flow.institutionalOwnership}</div>
+              </div>
+            )}
+            {flow["13fChange"] && (
+              <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 3, padding: "7px 9px" }}>
+                <div style={{ fontSize: 8, color: C.inst, textTransform: "uppercase", marginBottom: 3 }}>13F Change</div>
+                <div style={{ fontSize: 10, color: C.text }}>{flow["13fChange"]}</div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── SIGNAL CARD ───────────────────────────────────────────────────────────────
+function SignalCard({ signal, leverage, budget, riskPct }) {
+  const [expanded, setExpanded] = useState(false);
+  const ac = actionColor(signal.action);
+  const slPct = signal.stopLossPct || 2;
+  const tpPct = signal.takeProfitPct || slPct * 2;
+  const pos = calcPositionSize(budget, riskPct, slPct, signal.suggestedLeverage || leverage);
+  const rr = (tpPct / slPct).toFixed(1);
+  const rrC = rr >= 2 ? C.buy : rr >= 1.5 ? C.hold : C.sell;
+  const bullish = Math.min(100, Math.max(0, signal.bullish || 50));
+  const ss = signal.sentimentSummary;
+  const nfColor = nf => nf === "POSITIVE" ? C.buy : nf === "NEGATIVE" ? C.sell : nf === "MIXED" ? C.hold : C.muted;
+
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 6, overflow: "hidden", borderTop: `2px solid ${ac}` }}>
+      <div style={{ padding: "14px 16px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <div>
+            <div style={{ fontFamily: "Syne,sans-serif", fontWeight: 800, fontSize: 18, color: "#fff" }}>{signal.asset}</div>
+            <div style={{ fontSize: 10, color: C.muted, marginTop: 1 }}>{signal.assetFull}</div>
+            {signal.currentPrice > 0 && <div style={{ fontSize: 10, color: C.accent, marginTop: 2 }}>${signal.currentPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ textAlign: "right", fontSize: 10, color: C.muted }}>R:R<br /><span style={{ color: rrC, fontWeight: 700, fontSize: 13 }}>1:{rr}</span></div>
+            <div style={{ fontFamily: "Syne,sans-serif", fontWeight: 800, fontSize: 13, letterSpacing: "0.15em", padding: "5px 12px", borderRadius: 3, border: `1px solid ${ac}`, background: `${ac}22`, color: ac }}>{signal.action}</div>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, marginBottom: 10 }}>
+          {[
+            { label: "Confidence", val: `${signal.confidence}%`, color: ac },
+            { label: "Leverage", val: `${signal.suggestedLeverage || leverage}×`, color: C.gold },
+            { label: "Stop Loss", val: `−${slPct}%`, color: C.sell, note: signal.slWasCapped ? "⚠ TIGHTENED" : null },
+            { label: "Take Profit", val: `+${tpPct}%`, color: C.buy },
+          ].map(({ label, val, color, note }) => (
+            <div key={label} style={{ background: "rgba(0,0,0,0.2)", borderRadius: 3, padding: "6px 8px" }}>
+              <div style={{ fontSize: 8, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 3 }}>{label}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color }}>{val}</div>
+              {note && <div style={{ fontSize: 7, color: C.gold, marginTop: 2 }}>{note}</div>}
+            </div>
+          ))}
+        </div>
+
+        <div style={{ height: 3, background: C.border, borderRadius: 2, overflow: "hidden", marginBottom: 10 }}>
+          <div style={{ height: "100%", width: `${signal.confidence}%`, background: ac }} />
+        </div>
+
+        {signal.institutionalFlow && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "5px 8px", background: "rgba(106,130,212,0.08)", border: `1px solid rgba(106,130,212,0.2)`, borderRadius: 3 }}>
+            <span style={{ fontSize: 9, color: C.inst }}>🏛 INST FLOW</span>
+            <span style={{ fontSize: 9, fontWeight: 700, color: signal.institutionalFlow.overallBias === "ACCUMULATING" ? C.buy : signal.institutionalFlow.overallBias === "DISTRIBUTING" ? C.sell : C.muted }}>
+              {signal.institutionalFlow.overallBias || "—"}
+            </span>
+            {signal.institutionalFlow.flowScore != null && (
+              <span style={{ marginLeft: "auto", fontSize: 10, fontWeight: 700, color: signal.institutionalFlow.flowScore >= 65 ? C.buy : signal.institutionalFlow.flowScore <= 35 ? C.sell : C.hold }}>
+                {signal.institutionalFlow.flowScore}/100
+              </span>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 10, marginBottom: 10 }}>
+          <span style={{ color: C.muted, minWidth: 52 }}>🐂 {bullish}%</span>
+          <div style={{ flex: 1, height: 5, background: C.border, borderRadius: 3, overflow: "hidden", display: "flex" }}>
+            <div style={{ width: `${bullish}%`, background: C.buy }} />
+            <div style={{ width: `${100 - bullish}%`, background: C.sell }} />
+          </div>
+          <span style={{ color: C.muted, minWidth: 52, textAlign: "right" }}>🐻 {100 - bullish}%</span>
+        </div>
+
+        {(() => {
+          const range = slPct + tpPct;
+          const slW = (slPct / range) * 40;
+          const tpW = (tpPct / range) * 60;
+          return (
+            <div>
+              <div style={{ position: "relative", height: 24, background: C.border, borderRadius: 3, overflow: "hidden" }}>
+                <div style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: `${slW}%`, background: "rgba(255,61,113,0.25)" }} />
+                <div style={{ position: "absolute", top: 0, bottom: 0, right: 0, width: `${tpW}%`, background: "rgba(0,230,118,0.2)" }} />
+                <div style={{ position: "absolute", top: 0, bottom: 0, left: `${slW}%`, width: 2, background: C.accent, boxShadow: `0 0 6px ${C.accent}` }} />
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, marginTop: 3 }}>
+                <span style={{ color: C.sell }}>▼ SL −{slPct}%</span>
+                <span style={{ color: C.accent }}>● ENTRY</span>
+                <span style={{ color: C.buy }}>▲ TP +{tpPct}%</span>
+              </div>
+            </div>
+          );
+        })()}
+
+        <button onClick={() => setExpanded(e => !e)} style={{ width: "100%", marginTop: 10, padding: "8px", background: "rgba(0,229,255,0.06)", border: `1px solid ${C.border}`, borderRadius: 3, color: C.accent, fontSize: 10, cursor: "pointer", fontFamily: "Space Mono,monospace" }}>
+          {expanded ? "▲ COLLAPSE" : "▼ FULL ANALYSIS"}
+        </button>
+      </div>
+
+      {expanded && (
+        <div style={{ borderTop: `1px solid ${C.border}`, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+          <TradingChart signal={signal} />
+
+          <div>
+            <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>Position Sizing</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {[
+                { label: "Position Size", val: fmt(pos.positionSize), sub: "Total exposure", color: C.accent },
+                { label: "Margin Required", val: fmt(pos.margin), sub: "Capital to commit", color: "#fff" },
+                { label: "Max Risk", val: `−${fmt(pos.riskAmount)}`, sub: `SL hit (${riskPct}%)`, color: C.sell },
+                { label: "Max Profit", val: `+${fmt(pos.positionSize * tpPct / 100)}`, sub: "TP hit", color: C.buy },
+              ].map(({ label, val, sub, color }) => (
+                <div key={label} style={{ background: "rgba(0,0,0,0.3)", border: `1px solid ${C.border}`, borderRadius: 3, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 8, color: C.muted, textTransform: "uppercase", marginBottom: 3 }}>{label}</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color }}>{val}</div>
+                  <div style={{ fontSize: 8, color: C.muted, marginTop: 2 }}>{sub}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+              <div style={{ background: "rgba(0,0,0,0.3)", border: `1px solid ${C.border}`, borderRadius: 3, padding: "8px 10px" }}>
+                <div style={{ fontSize: 8, color: C.muted, textTransform: "uppercase", marginBottom: 3 }}>Stop Loss Level</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.sell }}>{signal.stopLossNote || "—"}</div>
+              </div>
+              <div style={{ background: "rgba(0,0,0,0.3)", border: `1px solid ${C.border}`, borderRadius: 3, padding: "8px 10px" }}>
+                <div style={{ fontSize: 8, color: C.muted, textTransform: "uppercase", marginBottom: 3 }}>Take Profit Level</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.buy }}>{signal.takeProfitNote || "—"}</div>
+              </div>
+            </div>
+          </div>
+
+          <InstitutionalPanel flow={signal.institutionalFlow} />
+
+          {ss && (
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: 4, overflow: "hidden" }}>
+              <div style={{ padding: "10px 12px", background: "rgba(0,0,0,0.3)", borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ fontSize: 11, color: C.text, marginBottom: 8 }}>💬 {ss.headline}</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {ss.newsFlow && <span style={{ fontSize: 8, padding: "2px 7px", border: `1px solid ${nfColor(ss.newsFlow)}`, borderRadius: 2, color: nfColor(ss.newsFlow) }}>📰 {ss.newsFlow === "NO_RECENT_DATA" ? "NO NEWS <4H" : ss.newsFlow}</span>}
+                  {ss.socialSentiment && (() => {
+                    const sc = ss.socialSentiment.includes("BULLISH") ? C.buy : ss.socialSentiment.includes("BEARISH") ? C.sell : C.hold;
+                    return <span style={{ fontSize: 8, padding: "2px 7px", border: `1px solid ${sc}`, borderRadius: 2, color: sc }}>🐦 {ss.socialSentiment.replace("_", " ")}</span>;
+                  })()}
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ padding: "10px 12px", borderRight: `1px solid ${C.border}` }}>
+                  <div style={{ fontSize: 9, color: C.buy, textTransform: "uppercase", marginBottom: 6, fontWeight: 700 }}>▲ Bull Case</div>
+                  {(ss.bullPoints || []).map((p, i) => <div key={i} style={{ display: "flex", gap: 5, marginBottom: 4, fontSize: 10, color: C.text, lineHeight: 1.4 }}><span style={{ color: C.buy, flexShrink: 0 }}>+</span><span>{p}</span></div>)}
+                </div>
+                <div style={{ padding: "10px 12px" }}>
+                  <div style={{ fontSize: 9, color: C.sell, textTransform: "uppercase", marginBottom: 6, fontWeight: 700 }}>▼ Bear Case</div>
+                  {(ss.bearPoints || []).map((p, i) => <div key={i} style={{ display: "flex", gap: 5, marginBottom: 4, fontSize: 10, color: C.text, lineHeight: 1.4 }}><span style={{ color: C.sell, flexShrink: 0 }}>−</span><span>{p}</span></div>)}
+                </div>
+              </div>
+              <div style={{ padding: "8px 12px", display: "flex", gap: 12, flexWrap: "wrap" }}>
+                {(ss.catalysts || []).length > 0 && (
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 8, color: C.muted, textTransform: "uppercase", marginBottom: 4 }}>⚡ Catalysts</div>
+                    {ss.catalysts.map((cat, i) => <div key={i} style={{ fontSize: 10, color: C.gold, marginBottom: 2 }}>• {cat}</div>)}
+                  </div>
+                )}
+                {ss.analystConsensus && (
+                  <div>
+                    <div style={{ fontSize: 8, color: C.muted, textTransform: "uppercase", marginBottom: 4 }}>📊 Analyst</div>
+                    <div style={{ fontSize: 10, color: C.text }}>{ss.analystConsensus}</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
+            <div style={{ fontSize: 9, color: C.text, textTransform: "uppercase", marginBottom: 6, fontWeight: 700 }}>AI Chart Analysis</div>
+            <div style={{ fontSize: 10, color: C.accent, marginBottom: 5 }}>📍 {signal.entryNote}</div>
+            <div style={{ fontSize: 10, color: C.muted, marginBottom: 5 }}>⚡ Key: <span style={{ color: C.text }}>{signal.keyLevel || "—"}</span></div>
+            <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.7 }}>{signal.reasoning}</div>
+          </div>
+
+          <div style={{ background: "rgba(0,229,255,0.04)", border: `1px solid rgba(0,229,255,0.15)`, borderRadius: 3, padding: "10px 12px" }}>
+            <div style={{ fontSize: 9, color: C.accent, textTransform: "uppercase", marginBottom: 6 }}>eToro Execution</div>
+            {[
+              "① Open eToro",
+              `② Search: ${signal.asset}`,
+              "③ Tap TRADE",
+              `④ Set ${fmt(pos.margin)} margin · ${signal.suggestedLeverage || leverage}× leverage`,
+              `⑤ SL: ${signal.stopLossNote || `−${slPct}%`}`,
+              `⑥ TP: ${signal.takeProfitNote || `+${tpPct}%`}`,
+              "⑦ Tap OPEN TRADE",
+            ].map((s, i) => (
+              <div key={i} style={{ fontSize: 10, color: i === 2 ? C.buy : i === 6 ? C.accent : C.muted, marginBottom: 3 }}>{s}</div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── OUTCOME STATUS PANEL ──────────────────────────────────────────────────────
+function OutcomePanel({ status }) {
+  if (!status) return null;
+  const goalColor = status.goalMet ? C.buy : C.inst;
+  const borderColor = status.goalMet ? "rgba(0,230,118,0.3)" : "rgba(106,130,212,0.3)";
+  const bgColor = status.goalMet ? "rgba(0,230,118,0.06)" : "rgba(106,130,212,0.06)";
+  return (
+    <div style={{ background: bgColor, border: `1px solid ${borderColor}`, borderRadius: 4, padding: "12px 14px", marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <div style={{ fontSize: 9, color: goalColor, textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 700 }}>
+          🎯 OUTCOME LOOP {status.goalMet ? "— GOAL MET ✓" : `— ITERATION ${status.iteration}/3`}
+        </div>
+        <div style={{ fontSize: 8, color: C.muted }}>Haiku grader · Find ≥1 opportunity</div>
+      </div>
+      {status.criteria && Object.keys(status.criteria).length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 4, marginBottom: 8 }}>
+          {Object.entries(status.criteria).map(([k, v]) => (
+            <div key={k} style={{ background: "rgba(0,0,0,0.2)", borderRadius: 2, padding: "4px 6px", display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{ fontSize: 9, color: v.pass ? C.buy : C.sell }}>{v.pass ? "✓" : "✗"}</span>
+              <span style={{ fontSize: 8, color: C.muted }}>{k}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {(status.log || []).length > 0 && (
+        <div style={{ display: "flex", gap: 4, marginBottom: status.feedback && !status.goalMet ? 8 : 0, flexWrap: "wrap" }}>
+          {status.log.map((it, i) => (
+            <div key={i} style={{ fontSize: 8, padding: "2px 7px", borderRadius: 2, border: `1px solid ${it.goalMet ? C.buy : it.passed ? C.buy : C.sell}`, color: it.goalMet ? C.buy : it.passed ? C.buy : C.sell }}>
+              Iter {it.iteration}: {it.goalMet ? "GOAL MET" : it.passed ? "PASS" : "FAIL"}
+            </div>
+          ))}
+        </div>
+      )}
+      {status.feedback && !status.goalMet && (
+        <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.5, borderTop: `1px solid rgba(106,130,212,0.2)`, paddingTop: 6 }}>
+          <span style={{ color: C.inst }}>Grader: </span>{status.feedback}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── MANAGE KEY MODAL ──────────────────────────────────────────────────────────
+function ManageKeyModal({ onClose, onUpdate }) {
+  const [keyInput, setKeyInput] = useState("");
+  const [validating, setValidating] = useState(false);
+  const [err, setErr] = useState(null);
+  const [saved, setSaved] = useState(false);
+
+  const handleSave = async () => {
+    const trimmed = keyInput.trim();
+    if (!trimmed) { setErr("Please enter a key."); return; }
+    if (!trimmed.startsWith("sk-ant-")) { setErr("Doesn't look like an Anthropic key (should start with sk-ant-)."); return; }
+    setErr(null); setValidating(true);
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": trimmed, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 10, messages: [{ role: "user", content: "ping" }] }),
+      });
+      if (res.status === 401) { setErr("Invalid key — Anthropic rejected it."); setValidating(false); return; }
+    } catch { /* accept anyway */ }
+    localStorage.setItem("apex_api_key", trimmed);
+    onUpdate(trimmed);
+    setSaved(true);
+    setValidating(false);
+    setTimeout(onClose, 1000);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: 24, width: "100%", maxWidth: 400 }}>
+        <div style={{ fontSize: 14, color: C.text, fontWeight: 700, marginBottom: 16 }}>Update API Key</div>
+        <input
+          type="password"
+          value={keyInput}
+          onChange={e => { setKeyInput(e.target.value); setErr(null); }}
+          placeholder="sk-ant-api03-…"
+          autoFocus
+          style={{ width: "100%", padding: "10px", border: `1px solid ${err ? C.sell : C.border}`, background: C.surface, color: C.accent, borderRadius: 4, fontFamily: "monospace", fontSize: 12, outline: "none", marginBottom: 8, boxSizing: "border-box" }}
+          onKeyDown={e => e.key === "Enter" && !validating && handleSave()}
+        />
+        {err && <p style={{ fontSize: 11, color: C.sell, marginBottom: 10 }}>{err}</p>}
+        {saved && <p style={{ fontSize: 11, color: C.buy, marginBottom: 10 }}>✓ Key updated!</p>}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={handleSave} disabled={validating} style={{ flex: 1, padding: "10px", background: C.accent, color: "#000", border: "none", borderRadius: 4, fontFamily: "Syne,sans-serif", fontWeight: 700, cursor: validating ? "not-allowed" : "pointer" }}>
+            {validating ? "Validating…" : "Save"}
+          </button>
+          <button onClick={onClose} style={{ padding: "10px 16px", background: "transparent", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 4, cursor: "pointer", fontFamily: "monospace", fontSize: 12 }}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── ROOT AUTH WRAPPER ─────────────────────────────────────────────────────────
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [apiKey, setApiKey] = useState(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    const storedUser = localStorage.getItem("apex_user");
+    const storedKey = localStorage.getItem("apex_api_key");
+    if (storedUser) {
+      try { setUser(JSON.parse(storedUser)); } catch { localStorage.removeItem("apex_user"); }
+    }
+    if (storedKey) setApiKey(storedKey);
+    setReady(true);
+  }, []);
+
+  const handleSignIn = useCallback((userData) => {
+    const userObj = { email: userData.email, name: userData.name, picture: userData.picture };
+    localStorage.setItem("apex_user", JSON.stringify(userObj));
+    setUser(userObj);
+    if (userData.email === SPECIAL_USER_EMAIL && SPECIAL_USER_API_KEY) {
+      localStorage.setItem("apex_api_key", SPECIAL_USER_API_KEY);
+      setApiKey(SPECIAL_USER_API_KEY);
+    }
+  }, []);
+
+  const handleSetApiKey = useCallback((key) => {
+    localStorage.setItem("apex_api_key", key);
+    setApiKey(key);
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    try { await signOutFirebase(); } catch { /* ignore */ }
+    localStorage.removeItem("apex_user");
+    localStorage.removeItem("apex_api_key");
+    setUser(null);
+    setApiKey(null);
+  }, []);
+
+  if (!ready) return null; // Avoid flash before localStorage is read
+  if (!user) return <LoginScreen onSignIn={handleSignIn} />;
+  if (!apiKey) return <ApiKeyPrompt user={user} onSetKey={handleSetApiKey} onLogout={handleLogout} />;
+  return <ApexEagleApp user={user} apiKey={apiKey} onLogout={handleLogout} onUpdateKey={handleSetApiKey} />;
+}
+
+// ── MAIN APP ──────────────────────────────────────────────────────────────────
+function ApexEagleApp({ user, apiKey, onLogout, onUpdateKey }) {
+  const [selectedAI, setSelectedAI] = useState(new Set(["NVDA", "MSFT"]));
+  const [selectedEnergy, setSelectedEnergy] = useState(new Set());
+  const [leverage, setLeverage] = useState(2);
+  const [budget, setBudget] = useState(10000);
+  const [riskPct, setRiskPct] = useState(2);
+  const [loading, setLoading] = useState(false);
+  const [loaderStep, setLoaderStep] = useState("");
+  const [signals, setSignals] = useState([]);
+  const [sentiment, setSentiment] = useState(null);
+  const [riskSummary, setRiskSummary] = useState(null);
+  const [signalLog, setSignalLog] = useState([]);
+  const [error, setError] = useState(null);
+  const [tab, setTab] = useState("signals");
+  const [outcomeStatus, setOutcomeStatus] = useState(null);
+  const [showKeyModal, setShowKeyModal] = useState(false);
+
+  const toggleAsset = (setFn, id) => setFn(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const selectedAssets = [...selectedAI, ...selectedEnergy];
+  const sentColor = sentiment ? (sentiment.score >= 70 ? C.buy : sentiment.score <= 30 ? C.sell : C.hold) : C.muted;
+
+  const normalizeSignals = useCallback((sigs, lev) => sigs.map(s => {
+    const cap = SL_CAPS[s.asset] ?? SL_CAPS.DEFAULT;
+    const rawSL = Number(s.stopLossPct) || 2.0;
+    const clampedSL = Math.min(rawSL, cap);
+    const minTP = +(clampedSL * 1.5).toFixed(2);
+    return {
+      ...s,
+      confidence: Number(s.confidence) || 70,
+      stopLossPct: +clampedSL.toFixed(2),
+      takeProfitPct: +Math.max(Number(s.takeProfitPct) || minTP, minTP).toFixed(2),
+      slWasCapped: rawSL > cap,
+      rsi: Number(s.rsi) || 50,
+      bullish: Number(s.bullish) || 50,
+      suggestedLeverage: Math.min(Number(s.suggestedLeverage) || lev, lev),
+      currentPrice: Number(s.currentPrice) || 0,
+    };
+  }), []);
+
+  const runAnalysis = async () => {
+    if (!selectedAssets.length) { alert("Select at least one asset."); return; }
+    setLoading(true); setError(null); setSignals([]); setOutcomeStatus(null); setTab("signals");
+    try {
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+      const dateStr = now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+      const MAX_ITER = 3;
+      let lastResult = null, graderFeedback = null, goalMet = false;
+      const iterLog = [];
+
+      for (let iter = 1; iter <= MAX_ITER; iter++) {
+        setOutcomeStatus({ iteration: iter, passed: false, feedback: graderFeedback, goalMet: false, log: [...iterLog] });
+        setLoaderStep(`🎯 Outcome loop — iteration ${iter}/${MAX_ITER}…`);
+
+        const agentPrompt = `You are APEX Eagle, elite intraday day trading analyst. Today is ${dateStr} at ${timeStr} UTC.
+Assets: ${selectedAssets.join(", ")}
+Portfolio: $${budget.toLocaleString()} | Risk: ${riskPct}% per trade | Max leverage: ${leverage}x
+GOAL: Find at least one strong BUY or SELL opportunity with confidence >= 65%.
+${graderFeedback ? `GRADER FEEDBACK — fix these issues:\n${graderFeedback}\n` : ""}
+Search current prices, recent price action, dark pool, options flow, institutional signals.
+SIGNAL ALIGNMENT: If institutional flow contradicts technical signal, lower confidence 15+ pts or set HOLD.
+STOP LOSS RULES: TIGHT SLs based on nearest technical level — NOT a percentage guess.
+Caps: MSFT/GOOGL/META<=2.0%, NVDA/AMD/PLTR/SMCI<=2.5%, SOUN<=3.0%, XOM/CVX/BP/SLB<=1.8%, COP<=1.8%, OXY/FANG<=2.2%, Gold<=1.2%, Oil<=2.0%
+TP must be >=1.5x SL. stopLossNote MUST include a specific price. If no tight SL exists -> HOLD. Reduce leverage on volatile days.
+Return ONLY valid JSON, no markdown:
+{"overallSentiment":<0-100>,"overallLabel":"<EXTREME FEAR|FEAR|NEUTRAL|GREED|EXTREME GREED>","signals":[{"asset":"<ticker>","assetFull":"<name>","currentPrice":<n>,"action":"<BUY|SELL|HOLD>","confidence":<0-100>,"suggestedLeverage":<1-${leverage}>,"entryNote":"<specific entry e.g. breakout above $X>","stopLossPct":<n>,"stopLossNote":"<exact price + reason>","takeProfitPct":<n>,"takeProfitNote":"<target>","bullish":<0-100>,"keyLevel":"<price>","rsi":<0-100>,"trend":"<UPTREND|DOWNTREND|SIDEWAYS>","patterns":"<pattern>","volume":"<ABOVE_AVG|BELOW_AVG|AVERAGE>","reasoning":"<2-3 sentences>"}]}`;
+
+        const agentData = await callApi(apiKey, {
+          max_tokens: 4000,
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+          messages: [{ role: "user", content: agentPrompt }],
+        });
+        const agentText = agentData.content.filter(b => b.type === "text").map(b => b.text).join("");
+        const result = safeParseJson(agentText);
+        if (!result?.signals?.length) {
+          graderFeedback = "Agent returned invalid JSON or empty signals array. Retry with properly formatted output.";
+          iterLog.push({ iteration: iter, passed: false, goalMet: false, feedback: graderFeedback });
+          continue;
+        }
+        lastResult = result;
+        const normalized = normalizeSignals(result.signals, leverage);
+
+        setLoaderStep(`🔍 Haiku grader evaluating iteration ${iter}…`);
+        const graderPrompt = `You are the APEX Eagle Outcome Grader running on Haiku. You did NOT produce this output. Evaluate it independently.
+
+## RUBRIC
+${OUTCOME_RUBRIC}
+
+## AGENT OUTPUT
+${JSON.stringify(normalized.map(s => ({ asset: s.asset, action: s.action, confidence: s.confidence, stopLossPct: s.stopLossPct, stopLossNote: s.stopLossNote, takeProfitPct: s.takeProfitPct, entryNote: s.entryNote, currentPrice: s.currentPrice })))}
+
+Return ONLY valid JSON:
+{"passed":<true if ALL 6 criteria pass>,"goalMet":<true if C1+C2 both pass>,"criteria":{"C1":{"pass":<bool>,"note":"<brief>"},"C2":{"pass":<bool>,"note":"<brief>"},"C3":{"pass":<bool>,"note":"<brief>"},"C4":{"pass":<bool>,"note":"<brief>"},"C5":{"pass":<bool>,"note":"<brief>"},"C6":{"pass":<bool>,"note":"<brief>"}},"feedback":"<if failed: precise instructions. If passed: All criteria met.>"}`;
+
+        const graderData = await callApi(apiKey, {
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 800,
+          messages: [{ role: "user", content: graderPrompt }],
+        });
+        const graderResult = safeParseJson(graderData.content.filter(b => b.type === "text").map(b => b.text).join(""));
+        const entry = {
+          iteration: iter,
+          passed: graderResult?.passed ?? false,
+          goalMet: graderResult?.goalMet ?? false,
+          criteria: graderResult?.criteria ?? {},
+          feedback: graderResult?.feedback ?? "Parse error",
+        };
+        iterLog.push(entry);
+
+        if (graderResult?.passed || graderResult?.goalMet) {
+          goalMet = true;
+          setOutcomeStatus({ iteration: iter, passed: true, goalMet: true, criteria: graderResult.criteria, feedback: "All criteria met.", log: [...iterLog] });
+          setSentiment({ score: result.overallSentiment ?? 50, label: result.overallLabel ?? "NEUTRAL" });
+          setSignals([...normalized]);
+          const active = normalized.filter(s => s.action !== "HOLD");
+          setRiskSummary({ totalMargin: active.reduce((sum, s) => sum + calcPositionSize(budget, riskPct, s.stopLossPct, s.suggestedLeverage).margin, 0), totalRisk: active.length * (budget * riskPct / 100), activeCount: active.length, total: normalized.length });
+          break;
+        } else {
+          graderFeedback = graderResult?.feedback || "Criteria not met.";
+          setOutcomeStatus({ iteration: iter, passed: false, goalMet: false, criteria: graderResult?.criteria ?? {}, feedback: graderFeedback, log: [...iterLog] });
+          if (iter < MAX_ITER) await sleep(800);
+        }
+      }
+
+      if (!goalMet && lastResult) {
+        const fb = normalizeSignals(lastResult.signals || [], leverage);
+        setSentiment({ score: lastResult.overallSentiment ?? 50, label: lastResult.overallLabel ?? "NEUTRAL" });
+        setSignals([...fb]);
+        const active = fb.filter(s => s.action !== "HOLD");
+        setRiskSummary({ totalMargin: active.reduce((sum, s) => sum + calcPositionSize(budget, riskPct, s.stopLossPct, s.suggestedLeverage).margin, 0), totalRisk: active.length * (budget * riskPct / 100), activeCount: active.length, total: fb.length });
+      }
+
+      // Enrichment
+      setLoaderStep("Scanning institutional flow & dark pool…");
+      const currentSigs = (lastResult?.signals || []).map(s => ({ ...s, currentPrice: Number(s.currentPrice) || 100, trend: s.trend || "SIDEWAYS" }));
+      if (currentSigs.length) {
+        try {
+          const assetList = currentSigs.map(s => `${s.asset} ($${s.currentPrice}, ${s.trend})`).join(", ");
+          const enrichPrompt = `You are APEX Eagle. Search the web for each asset: ${assetList}.
+For EACH asset: 1. News from last 4 hours only. 2. Institutional flow: dark pool prints (unusualwhales.com), options put/call ratio, unusual block trades, SEC insider filings, ETF flows (QQQ, XLK, XLE).
+Return ONLY valid JSON:
+{"assets":{"<TICKER>":{"sentimentSummary":{"headline":"<1 sentence>","bullPoints":["<b1>","<b2>","<b3>"],"bearPoints":["<r1>","<r2>","<r3>"],"catalysts":["<c1>","<c2>"],"analystConsensus":"<short>","newsFlow":"<POSITIVE|NEGATIVE|MIXED|NEUTRAL|NO_RECENT_DATA>","socialSentiment":"<VERY_BULLISH|BULLISH|NEUTRAL|BEARISH|VERY_BEARISH>"},"institutionalFlow":{"overallBias":"<ACCUMULATING|DISTRIBUTING|NEUTRAL>","darkPool":{"signal":"<BULLISH|BEARISH|NEUTRAL|NO_DATA>","detail":"<detail>","recentPrints":["<p1>","<p2>"]},"optionsFlow":{"putCallRatio":"<n or N/A>","signal":"<BULLISH|BEARISH|NEUTRAL>","unusualActivity":"<detail>"},"insiderActivity":{"signal":"<BUYING|SELLING|NEUTRAL|NO_RECENT>","detail":"<detail>"},"etfFlow":{"signal":"<INFLOW|OUTFLOW|NEUTRAL>","detail":"<detail>"},"institutionalOwnership":"<detail>","13fChange":"<detail>","flowScore":<0-100>},"ohlcv":[{"o":<n>,"h":<n>,"l":<n>,"c":<n>,"v":<0-100>}]}}}
+ohlcv: exactly 20 candles ending near current price. Never fabricate specific dollar amounts.`;
+          const enriched = safeParseJson(
+            (await callApi(apiKey, { max_tokens: 6000, tools: [{ type: "web_search_20250305", name: "web_search" }], messages: [{ role: "user", content: enrichPrompt }] }))
+              .content.filter(b => b.type === "text").map(b => b.text).join("")
+          );
+          setSignals(prev => prev.map(s => {
+            const e = enriched?.assets?.[s.asset];
+            const rawOhlcv = Array.isArray(e?.ohlcv) ? e.ohlcv.filter(c => c && typeof c.o === "number") : [];
+            const ohlcv = rawOhlcv.length >= 3 ? rawOhlcv : generateFallbackOHLCV(s.currentPrice, s.trend, 20);
+            const flow = e?.institutionalFlow || null;
+            let conf = s.confidence;
+            if (flow) {
+              const al = (s.action === "BUY" && flow.overallBias === "ACCUMULATING") || (s.action === "SELL" && flow.overallBias === "DISTRIBUTING");
+              const ag = (s.action === "BUY" && flow.overallBias === "DISTRIBUTING") || (s.action === "SELL" && flow.overallBias === "ACCUMULATING");
+              if (al) conf = Math.min(99, conf + 8);
+              if (ag) conf = Math.max(10, conf - 12);
+              if (flow.darkPool?.signal === "BULLISH" && s.action === "BUY") conf = Math.min(99, conf + 5);
+              if (flow.darkPool?.signal === "BEARISH" && s.action === "BUY") conf = Math.max(10, conf - 5);
+              if (flow.optionsFlow?.signal === "BULLISH" && s.action === "BUY") conf = Math.min(99, conf + 4);
+              if (flow.optionsFlow?.signal === "BEARISH" && s.action === "BUY") conf = Math.max(10, conf - 4);
+            }
+            return { ...s, confidence: conf, sentimentSummary: e?.sentimentSummary || null, institutionalFlow: flow, ohlcv };
+          }));
+        } catch {
+          setSignals(prev => prev.map(s => ({ ...s, ohlcv: s.ohlcv || generateFallbackOHLCV(s.currentPrice, s.trend, 20) })));
+        }
+      }
+
+      const time = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+      setSignals(prev => {
+        setSignalLog(log => [...prev.map(s => ({ ...s, time })), ...log].slice(0, 40));
+        return prev;
+      });
+    } catch (err) {
+      setError(err.message);
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div style={{ background: C.bg, color: C.text, fontFamily: "'Space Mono',monospace", height: "100vh", display: "flex", flexDirection: "column", fontSize: 12, overflow: "hidden" }}>
+      <GlobalStyles />
+      {showKeyModal && <ManageKeyModal onClose={() => setShowKeyModal(false)} onUpdate={onUpdateKey} />}
+
+      {loading && (
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, height: 40, background: "rgba(7,10,15,0.97)", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10, padding: "0 16px", backdropFilter: "blur(8px)" }}>
+          <div style={{ width: 12, height: 12, border: `2px solid ${C.border}`, borderTopColor: C.accent, borderRadius: "50%", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
+          <span style={{ fontSize: 10, color: C.accent, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{loaderStep}</span>
+          <div style={{ width: 80, height: 2, background: C.border, borderRadius: 1, overflow: "hidden", flexShrink: 0 }}>
+            <div style={{ height: "100%", background: `linear-gradient(90deg,${C.accent},#39ff14)`, animation: "progress 1.5s ease-in-out infinite" }} />
+          </div>
+        </div>
+      )}
+      {loading && <div style={{ height: 40, flexShrink: 0 }} />}
+
+      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, background: "linear-gradient(135deg,#0f1018,#151722,#0f1018)", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div className="eagle-anim"><Eagle size={36} /></div>
+          <div>
+            <div style={{ fontFamily: "Syne,sans-serif", fontWeight: 800, fontSize: 16, letterSpacing: "0.2em", color: "#c8d0e0" }}>APEX EAGLE</div>
+            <div style={{ fontSize: 8, color: "#6a5fa8", letterSpacing: "0.1em", marginTop: 1 }}>{user.email}</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {sentiment && <div style={{ fontFamily: "Syne,sans-serif", fontWeight: 800, fontSize: 18, color: sentColor }}>{sentiment.score}<span style={{ fontSize: 8, color: C.muted, marginLeft: 4 }}>{sentiment.label}</span></div>}
+          <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#39ff14", boxShadow: "0 0 6px #39ff14", animation: "pulse 2s infinite" }} />
+          <button onClick={onLogout} style={{ padding: "5px 10px", background: "transparent", border: `1px solid ${C.border}`, color: C.muted, fontSize: 9, borderRadius: 3, cursor: "pointer", fontFamily: "monospace" }}>Sign out</button>
+        </div>
+      </header>
+
+      <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        {tab === "signals" && (
+          <div style={{ flex: 1, overflowY: "auto", padding: "12px 12px 90px" }}>
+            {error && <div style={{ background: "rgba(255,61,113,0.08)", border: `1px solid rgba(255,61,113,0.3)`, borderRadius: 3, padding: "10px 12px", fontSize: 10, color: C.sell, marginBottom: 10 }}>⚠ {error}</div>}
+            <OutcomePanel status={outcomeStatus} />
+            {!signals.length && !loading && !error && !outcomeStatus && (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", paddingTop: 60, gap: 16, textAlign: "center" }}>
+                <div className="eagle-anim" style={{ opacity: 0.4 }}><Eagle size={64} /></div>
+                <div style={{ fontFamily: "Syne,sans-serif", fontSize: 16, color: C.text }}>SELECT ASSETS & ANALYZE</div>
+                <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.8, maxWidth: 280 }}>Go to Settings, pick assets and risk params, then hit Analyze.<br />A Haiku grader verifies every result before showing it.</div>
+                <button onClick={() => setTab("settings")} style={{ padding: "10px 24px", background: C.accent, color: "#000", border: "none", fontFamily: "Syne,sans-serif", fontWeight: 700, fontSize: 12, borderRadius: 3, cursor: "pointer" }}>⚙ OPEN SETTINGS</button>
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {signals.map((sig, i) => <SignalCard key={`${sig.asset}-${i}`} signal={sig} leverage={leverage} budget={budget} riskPct={riskPct} />)}
+            </div>
+          </div>
+        )}
+
+        {tab === "settings" && (
+          <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 90px" }}>
+            <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 10 }}>AI Stocks</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>
+              {AI_ASSETS.map(a => <button key={a.id} onClick={() => toggleAsset(setSelectedAI, a.id)} style={{ padding: "7px 13px", borderRadius: 3, fontSize: 11, cursor: "pointer", border: `1px solid ${selectedAI.has(a.id) ? C.accent : C.border}`, background: selectedAI.has(a.id) ? "rgba(0,229,255,0.1)" : "transparent", color: selectedAI.has(a.id) ? C.accent : C.muted, fontFamily: "Space Mono,monospace" }}>{a.label}</button>)}
+            </div>
+            <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 10 }}>Energy & Commodities</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>
+              {ENERGY_ASSETS.map(a => <button key={a.id} onClick={() => toggleAsset(setSelectedEnergy, a.id)} style={{ padding: "7px 13px", borderRadius: 3, fontSize: 11, cursor: "pointer", border: `1px solid ${selectedEnergy.has(a.id) ? C.accent : C.border}`, background: selectedEnergy.has(a.id) ? "rgba(0,229,255,0.1)" : "transparent", color: selectedEnergy.has(a.id) ? C.accent : C.muted, fontFamily: "Space Mono,monospace" }}>{a.label}</button>)}
+            </div>
+            <div style={{ height: 1, background: C.border, marginBottom: 20 }} />
+            <div style={{ display: "grid", gap: 16, marginBottom: 20 }}>
+              <div><div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>Portfolio Budget</div><input type="number" value={budget} min={100} step={500} onChange={e => setBudget(parseFloat(e.target.value) || 10000)} /></div>
+              <div><div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>Risk Per Trade</div><select value={riskPct} onChange={e => setRiskPct(parseFloat(e.target.value))}>{RISK_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select></div>
+              <div>
+                <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>Max Leverage — <span style={{ color: C.gold, fontWeight: 700 }}>{leverage}×</span></div>
+                <input type="range" min={1} max={5} step={1} value={leverage} onChange={e => setLeverage(parseInt(e.target.value))} />
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 8, color: C.muted, marginTop: 4 }}>{[1, 2, 3, 4, 5].map(v => <span key={v} style={{ color: v === leverage ? C.gold : C.muted }}>{v}×</span>)}</div>
+              </div>
+            </div>
+
+            <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 4, padding: "12px 14px", marginBottom: 16 }}>
+              <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>Analysis Summary</div>
+              <div style={{ fontSize: 11, color: C.text, marginBottom: 4 }}>{selectedAssets.length} asset{selectedAssets.length !== 1 ? "s" : ""} selected</div>
+              <div style={{ fontSize: 10, color: C.muted }}>Budget: {fmt(budget)} · Risk: {riskPct}% · Leverage: {leverage}×</div>
+              <div style={{ fontSize: 10, color: C.muted, marginTop: 3 }}>Max loss/trade: {fmt(budget * riskPct / 100)}</div>
+            </div>
+
+            {user.email !== SPECIAL_USER_EMAIL && (
+              <button onClick={() => setShowKeyModal(true)} style={{ width: "100%", padding: "10px", background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 4, fontFamily: "monospace", fontSize: 11, cursor: "pointer", marginBottom: 12 }}>
+                🔑 Update Anthropic API Key
+              </button>
+            )}
+
+            <div style={{ background: "rgba(106,130,212,0.06)", border: "1px solid rgba(106,130,212,0.25)", borderRadius: 3, padding: "10px 12px", marginBottom: 12, fontSize: 10, color: "rgba(106,130,212,0.8)", lineHeight: 1.6 }}>
+              🎯 OUTCOMES LOOP — Sonnet generates signals · Haiku grader verifies (≥1 opportunity, conf ≥65%, tight SL, R:R ≥1.5) · Up to 3 iterations.
+            </div>
+            <div style={{ background: "rgba(255,214,0,0.06)", border: "1px solid rgba(255,214,0,0.25)", borderRadius: 3, padding: "10px 12px", marginBottom: 16, fontSize: 10, color: "rgba(255,214,0,0.7)", lineHeight: 1.6 }}>
+              ⚠ AI signals are informational only. Day trading carries substantial risk. Never invest more than you can afford to lose.
+            </div>
+            <button onClick={runAnalysis} disabled={loading || !selectedAssets.length} style={{ width: "100%", padding: "14px", background: loading || !selectedAssets.length ? C.muted : C.accent, color: "#000", border: "none", fontFamily: "Syne,sans-serif", fontWeight: 800, fontSize: 14, letterSpacing: "0.15em", cursor: loading || !selectedAssets.length ? "not-allowed" : "pointer", borderRadius: 4, textTransform: "uppercase" }}>
+              {loading ? "ANALYZING…" : "▶ ANALYZE NOW"}
+            </button>
+          </div>
+        )}
+
+        {tab === "log" && (
+          <div style={{ flex: 1, overflowY: "auto", padding: "16px 12px 90px" }}>
+            {sentiment && (
+              <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 4, padding: "14px 16px", marginBottom: 12, textAlign: "center" }}>
+                <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>Market Sentiment</div>
+                <div style={{ fontFamily: "Syne,sans-serif", fontSize: 48, fontWeight: 800, color: sentColor, lineHeight: 1 }}>{sentiment.score}</div>
+                <div style={{ fontSize: 10, color: C.muted, letterSpacing: "0.15em", marginTop: 4 }}>{sentiment.label}</div>
+              </div>
+            )}
+            {riskSummary && (
+              <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 4, padding: "14px 16px", marginBottom: 12 }}>
+                <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 10 }}>Portfolio Risk</div>
+                {[
+                  { label: "Budget", val: fmt(budget), color: "#fff" },
+                  { label: "Active Signals", val: `${riskSummary.activeCount}/${riskSummary.total}`, color: "#fff" },
+                  { label: "Total Margin", val: fmt(riskSummary.totalMargin), color: riskSummary.totalMargin > budget * 0.8 ? C.sell : C.hold },
+                  { label: "Max Loss", val: `−${fmt(riskSummary.totalRisk)}`, color: C.sell },
+                  { label: "Portfolio at Risk", val: `${(riskSummary.totalRisk / budget * 100).toFixed(1)}%`, color: (riskSummary.totalRisk / budget * 100) > 15 ? C.sell : (riskSummary.totalRisk / budget * 100) > 8 ? C.hold : C.buy },
+                ].map(({ label, val, color }) => (
+                  <div key={label} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "5px 0", borderBottom: `1px solid ${C.border}` }}>
+                    <span style={{ color: C.muted }}>{label}</span><span style={{ fontWeight: 700, color }}>{val}</span>
+                  </div>
+                ))}
+                <div style={{ height: 5, background: C.border, borderRadius: 3, marginTop: 10, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${Math.min(100, riskSummary.totalRisk / budget * 400)}%`, background: (riskSummary.totalRisk / budget * 100) > 15 ? C.sell : (riskSummary.totalRisk / budget * 100) > 8 ? C.hold : C.buy, transition: "width 0.8s" }} />
+                </div>
+              </div>
+            )}
+            <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 10 }}>Signal Log</div>
+            {signalLog.length === 0
+              ? <div style={{ fontSize: 11, color: C.muted, textAlign: "center", padding: "30px 0" }}>No signals yet</div>
+              : signalLog.map((s, i) => {
+                const c = actionColor(s.action);
+                return (
+                  <div key={i} style={{ background: C.panel, border: `1px solid ${C.border}`, borderLeft: `3px solid ${c}`, borderRadius: 3, padding: "10px 12px", marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <div style={{ fontWeight: 700, color: "#fff", fontSize: 13 }}>{s.asset}</div>
+                      <div style={{ fontSize: 9, color: C.muted }}>{s.time} · {s.confidence}% conf · {s.suggestedLeverage}× lev</div>
+                      {s.currentPrice > 0 && <div style={{ fontSize: 9, color: C.accent }}>${s.currentPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>}
+                      {s.institutionalFlow && <div style={{ fontSize: 8, color: C.inst, marginTop: 1 }}>🏛 {s.institutionalFlow.overallBias} · Score: {s.institutionalFlow.flowScore}</div>}
+                    </div>
+                    <div style={{ fontSize: 11, padding: "3px 10px", borderRadius: 2, fontWeight: 700, background: `${c}22`, color: c, border: `1px solid ${c}` }}>{s.action}</div>
+                  </div>
+                );
+              })}
+          </div>
+        )}
+      </div>
+
+      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, display: "flex", background: "rgba(7,10,15,0.97)", borderTop: `1px solid ${C.border}`, backdropFilter: "blur(12px)", zIndex: 100, paddingBottom: "env(safe-area-inset-bottom,0px)" }}>
+        {[{ id: "signals", icon: "📊", label: "Signals" }, { id: "settings", icon: "⚙️", label: "Settings" }, { id: "log", icon: "📋", label: "Portfolio" }].map(({ id, icon, label }) => (
+          <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: "10px 0 8px", background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, position: "relative" }}>
+            <span style={{ fontSize: 20 }}>{icon}</span>
+            <span style={{ fontSize: 8, color: tab === id ? C.accent : C.muted, textTransform: "uppercase", fontFamily: "Space Mono,monospace" }}>{label}</span>
+            {tab === id && <div style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", width: 32, height: 2, background: C.accent, borderRadius: 1 }} />}
+          </button>
+        ))}
+        <button onClick={runAnalysis} disabled={loading} style={{ flex: 1.2, padding: "8px 0", background: loading ? C.muted : C.accent, border: "none", cursor: loading ? "not-allowed" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, borderRadius: "4px 4px 0 0", margin: "0 4px" }}>
+          <span style={{ fontSize: 16 }}>{loading ? "⏳" : "▶"}</span>
+          <span style={{ fontSize: 8, color: "#000", fontWeight: 700, fontFamily: "Space Mono,monospace" }}>{loading ? "WORKING" : "ANALYZE"}</span>
+        </button>
+      </nav>
+    </div>
+  );
+}
