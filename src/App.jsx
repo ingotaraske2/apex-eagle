@@ -31,12 +31,29 @@ const SL_CAPS = {
   COP: 1.8, OXY: 2.0, SLB: 1.8, BP: 1.5, FANG: 2.0,
   Gold: 1.2, CrudeOil: 2.0, DEFAULT: 2.5,
 };
+// Design tokens — refined dark terminal palette.
+// Softer contrast across surfaces, single cyan accent, clearer text hierarchy.
 const C = {
-  bg: "#070a0f", surface: "#0d1117", panel: "#111820",
-  border: "#1e2d3d", accent: "#00e5ff", buy: "#00e676",
-  sell: "#ff3d71", hold: "#ffd600", gold: "#ffd600",
-  text: "#c8d8e8", muted: "#4a6070", inst: "#6a82d4",
+  bg: "#0b0f14",          // app background
+  surface: "#11161d",      // raised surface (cards, inputs)
+  panel: "#161c24",        // panel / elevated section
+  panelHi: "#1c232d",      // hover / focus surface
+  border: "#222b37",       // standard border
+  borderSoft: "#1a212b",   // very subtle divider
+  accent: "#00e5ff",       // primary accent (selection, CTAs)
+  accentDim: "rgba(0,229,255,0.12)",
+  buy: "#22d39a",          // green (was #00e676 — slightly softer)
+  sell: "#ff5c7c",         // red (was #ff3d71)
+  hold: "#f0c14b",         // amber (was #ffd600 — less neon)
+  gold: "#f0c14b",
+  text: "#dde6f0",         // primary text — higher contrast than before
+  textDim: "#9aabbc",      // secondary text
+  muted: "#6a7c8e",        // labels (was #4a6070 — too dim)
+  inst: "#7d92dc",
 };
+const FONT_BODY = "'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif";
+const FONT_MONO = "'JetBrains Mono', 'SF Mono', Menlo, monospace";
+const FONT_DISPLAY = "'Syne', 'Inter', sans-serif"; // headlines / brand
 const OUTCOME_RUBRIC = `## APEX Eagle — Investment Opportunity Rubric
 GOAL: Find at least one actionable BUY or SELL signal with confidence >= 65%.
 [C1] Opportunity found — at least one signal has action BUY or SELL (not all HOLD)
@@ -284,19 +301,19 @@ function LoginScreen({ onSignIn }) {
   };
 
   return (
-    <div style={{ background: C.bg, color: C.text, fontFamily: "'Space Mono', monospace", minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "20px" }}>
+    <div style={{ background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px" }}>
       <GlobalStyles />
-      <div style={{ textAlign: "center", width: "100%", maxWidth: "460px" }}>
-        <div style={{ marginBottom: 32 }}>
+      <div style={{ textAlign: "center", width: "100%", maxWidth: "440px" }}>
+        <div style={{ marginBottom: 28 }}>
           <Eagle size={56} />
         </div>
-        <div style={{ fontFamily: "'Syne', sans-serif", fontSize: "40px", fontWeight: "800", color: "#c8d0e0", letterSpacing: "0.2em", marginBottom: "8px" }}>APEX EAGLE</div>
-        <div style={{ fontSize: "11px", color: "#6a5fa8", letterSpacing: "0.2em", marginBottom: "36px" }}>AI TRADING CO-PILOT</div>
+        <div style={{ fontFamily: FONT_DISPLAY, fontSize: "36px", fontWeight: 800, color: C.text, letterSpacing: "0.18em", marginBottom: 8 }}>APEX EAGLE</div>
+        <div style={{ fontSize: 12, color: C.muted, letterSpacing: "0.22em", marginBottom: 40, textTransform: "uppercase" }}>AI Trading Co-Pilot</div>
 
-        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: "10px", padding: "32px", marginBottom: "20px" }}>
-          <p style={{ fontSize: "13px", color: C.text, lineHeight: "1.8", marginBottom: "28px" }}>
+        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: 32, marginBottom: 16 }}>
+          <p style={{ fontSize: 14, color: C.textDim, lineHeight: 1.7, marginBottom: 28 }}>
             Sign in with your Google account to get started. Everyone can use APEX Eagle — you just need a free{" "}
-            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{ color: C.accent }}>Google Gemini API key</a>.
+            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">Google Gemini API key</a>.
           </p>
 
           <button
@@ -304,18 +321,18 @@ function LoginScreen({ onSignIn }) {
             disabled={loading}
             style={{
               display: "flex", alignItems: "center", justifyContent: "center", gap: 12,
-              width: "100%", padding: "12px 20px",
-              background: loading ? "#1a1a2e" : "#fff",
-              color: "#1f1f1f", border: "none", borderRadius: 6,
-              fontFamily: "'Roboto', sans-serif", fontSize: 15, fontWeight: 500,
+              width: "100%", padding: "14px 20px",
+              background: loading ? C.surface : "#fff",
+              color: "#1f1f1f", border: "none", borderRadius: 8,
+              fontSize: 15, fontWeight: 600,
               cursor: loading ? "not-allowed" : "pointer",
-              boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
-              transition: "opacity 0.2s",
+              boxShadow: "0 2px 12px rgba(0,0,0,0.4)",
+              transition: "opacity 0.2s, transform 0.1s",
               opacity: loading ? 0.7 : 1,
             }}
           >
             {loading ? (
-              <span style={{ color: C.muted, fontFamily: "'Space Mono', monospace", fontSize: 12 }}>Signing in…</span>
+              <span style={{ color: C.muted, fontSize: 14 }}>Signing in…</span>
             ) : (
               <>
                 <svg width="20" height="20" viewBox="0 0 48 48">
@@ -330,13 +347,13 @@ function LoginScreen({ onSignIn }) {
           </button>
 
           {authError && (
-            <p style={{ fontSize: "11px", color: C.sell, marginTop: 14, lineHeight: 1.6 }}>
+            <p style={{ fontSize: 13, color: C.sell, marginTop: 16, lineHeight: 1.55 }}>
               ⚠ {authError}
             </p>
           )}
         </div>
 
-        <p style={{ fontSize: "10px", color: C.muted, lineHeight: "1.7" }}>
+        <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.7 }}>
           AI signals are informational only. Day trading carries substantial risk.<br />
           Execute trades manually on your broker of choice.
         </p>
@@ -384,18 +401,18 @@ function ApiKeyPrompt({ user, onSetKey, onLogout }) {
   };
 
   return (
-    <div style={{ background: C.bg, color: C.text, fontFamily: "'Space Mono', monospace", minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "20px" }}>
+    <div style={{ background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <GlobalStyles />
-      <div style={{ width: "100%", maxWidth: "460px" }}>
+      <div style={{ width: "100%", maxWidth: 440 }}>
         <div style={{ textAlign: "center", marginBottom: 28 }}>
-          {user.picture && <img src={user.picture} alt="" style={{ width: 52, height: 52, borderRadius: "50%", border: `2px solid ${C.border}`, marginBottom: 12 }} />}
-          <div style={{ fontFamily: "'Syne', sans-serif", fontSize: "22px", fontWeight: "800", color: C.accent }}>Welcome, {user.name}!</div>
-          <div style={{ fontSize: "11px", color: C.muted, marginTop: 4 }}>{user.email}</div>
+          {user.picture && <img src={user.picture} alt="" style={{ width: 56, height: 56, borderRadius: "50%", border: `2px solid ${C.border}`, marginBottom: 14 }} />}
+          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 22, fontWeight: 700, color: C.text }}>Welcome, {user.name}</div>
+          <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>{user.email}</div>
         </div>
 
-        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: "10px", padding: "28px" }}>
-          <p style={{ fontSize: "13px", color: C.text, lineHeight: "1.8", marginBottom: "20px" }}>
-            Enter your <strong>Google Gemini API key</strong>. It is saved only in your browser's localStorage and is sent exclusively to Google's Generative Language API — never to any other server.
+        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: 28 }}>
+          <p style={{ fontSize: 14, color: C.textDim, lineHeight: 1.7, marginBottom: 20 }}>
+            Enter your <strong style={{ color: C.text, fontWeight: 600 }}>Google Gemini API key</strong>. It is saved only in your browser's localStorage and sent exclusively to Google's Generative Language API.
           </p>
 
           <input
@@ -405,24 +422,26 @@ function ApiKeyPrompt({ user, onSetKey, onLogout }) {
             placeholder="AIza…"
             autoFocus
             style={{
-              width: "100%", padding: "12px", border: `1px solid ${keyError ? C.sell : C.border}`,
-              background: C.surface, color: C.accent, borderRadius: "4px",
-              fontFamily: "'Space Mono', monospace", fontSize: "12px",
-              marginBottom: "8px", outline: "none", boxSizing: "border-box",
+              borderColor: keyError ? C.sell : C.border,
+              marginBottom: 10,
             }}
             onKeyDown={e => e.key === "Enter" && !validating && handleSubmit()}
           />
 
-          {keyError && <p style={{ fontSize: "11px", color: C.sell, marginBottom: "12px", lineHeight: 1.5 }}>⚠ {keyError}</p>}
+          {keyError && <p style={{ fontSize: 13, color: C.sell, marginBottom: 14, lineHeight: 1.55 }}>⚠ {keyError}</p>}
 
           <button
             onClick={handleSubmit}
             disabled={validating}
             style={{
-              width: "100%", padding: "12px", background: validating ? C.muted : C.accent,
-              color: "#000", border: "none", borderRadius: "4px",
-              fontFamily: "'Syne', sans-serif", fontWeight: "700", fontSize: "14px",
-              cursor: validating ? "not-allowed" : "pointer", marginBottom: "12px",
+              width: "100%", padding: "12px 16px",
+              background: validating ? C.surface : C.accent,
+              color: validating ? C.muted : "#001318",
+              border: "none", borderRadius: 8,
+              fontWeight: 700, fontSize: 15, letterSpacing: "0.02em",
+              cursor: validating ? "not-allowed" : "pointer",
+              marginBottom: 12,
+              transition: "opacity 0.15s",
             }}
           >
             {validating ? "Validating…" : "Continue →"}
@@ -431,17 +450,16 @@ function ApiKeyPrompt({ user, onSetKey, onLogout }) {
           <button
             onClick={onLogout}
             style={{
-              width: "100%", padding: "10px", background: "transparent", color: C.muted,
-              border: `1px solid ${C.border}`, borderRadius: "4px",
-              fontFamily: "'Space Mono', monospace", fontSize: "12px", cursor: "pointer",
+              width: "100%", padding: "10px 16px", background: "transparent", color: C.textDim,
+              border: `1px solid ${C.border}`, borderRadius: 8,
+              fontSize: 13, fontWeight: 500, cursor: "pointer",
             }}
           >
             ← Sign out
           </button>
 
-          <p style={{ fontSize: "10px", color: C.muted, marginTop: "16px", lineHeight: "1.7" }}>
-            Get your key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{ color: C.accent }}>aistudio.google.com/apikey</a>.<br />
-            Set a budget alert in Google Cloud Billing to cap costs.
+          <p style={{ fontSize: 12, color: C.muted, marginTop: 18, lineHeight: 1.7 }}>
+            Get your key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a>. Set a budget alert in Google Cloud Billing to cap costs.
           </p>
         </div>
       </div>
@@ -453,21 +471,61 @@ function ApiKeyPrompt({ user, onSetKey, onLogout }) {
 function GlobalStyles() {
   return (
     <style>{`
-      @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@600;700;800&display=swap');
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-      ::-webkit-scrollbar { width: 3px; }
-      ::-webkit-scrollbar-thumb { background: #1e2d3d; }
-      input[type=range] { -webkit-appearance: none; height: 3px; background: #1e2d3d; border-radius: 2px; outline: none; width: 100%; }
-      input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #ffd600; box-shadow: 0 0 8px #ffd600; cursor: pointer; }
-      input[type=number] { background: #111820; border: 1px solid #1e2d3d; color: #39ff14; font-family: monospace; font-size: 13px; font-weight: 700; padding: 6px 10px; width: 100%; border-radius: 3px; outline: none; }
-      select { background: #111820; border: 1px solid #1e2d3d; color: #ffd600; font-family: monospace; font-size: 12px; padding: 7px 8px; border-radius: 3px; outline: none; width: 100%; }
+      html, body { background: ${C.bg}; color: ${C.text}; }
+      body {
+        font-family: ${FONT_BODY};
+        font-size: 14px;
+        line-height: 1.55;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        text-rendering: optimizeLegibility;
+        font-feature-settings: "cv02","cv03","cv04","cv11";
+      }
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 4px; }
+      ::-webkit-scrollbar-thumb:hover { background: ${C.panelHi}; }
+      input[type=range] {
+        -webkit-appearance: none; height: 4px; background: ${C.border};
+        border-radius: 2px; outline: none; width: 100%;
+      }
+      input[type=range]::-webkit-slider-thumb {
+        -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%;
+        background: ${C.accent}; box-shadow: 0 0 0 4px rgba(0,229,255,0.12);
+        cursor: pointer; transition: box-shadow 0.15s;
+      }
+      input[type=range]::-webkit-slider-thumb:hover { box-shadow: 0 0 0 6px rgba(0,229,255,0.2); }
+      input[type=number], input[type=text], input[type=password] {
+        background: ${C.surface}; border: 1px solid ${C.border}; color: ${C.text};
+        font-family: ${FONT_MONO}; font-size: 14px; font-weight: 500;
+        padding: 10px 12px; width: 100%; border-radius: 6px; outline: none;
+        transition: border-color 0.15s, background 0.15s;
+      }
+      input[type=number]:focus, input[type=text]:focus, input[type=password]:focus {
+        border-color: ${C.accent}; background: ${C.panel};
+      }
+      select {
+        background: ${C.surface}; border: 1px solid ${C.border}; color: ${C.text};
+        font-family: ${FONT_BODY}; font-size: 14px; font-weight: 500;
+        padding: 10px 12px; border-radius: 6px; outline: none; width: 100%;
+        cursor: pointer; appearance: none;
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path fill='%239aabbc' d='M2 4l4 4 4-4z'/></svg>");
+        background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px;
+      }
+      select:focus { border-color: ${C.accent}; }
+      button { font-family: ${FONT_BODY}; }
+      button:active { transform: translateY(1px); opacity: 0.9; }
+      button:focus-visible { outline: 2px solid ${C.accent}; outline-offset: 2px; }
+      a { color: ${C.accent}; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .mono { font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; }
       @keyframes spin { to { transform: rotate(360deg); } }
-      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
       @keyframes progress { 0% { width: 0%; margin-left: 0; } 50% { width: 60%; margin-left: 20%; } 100% { width: 0%; margin-left: 100%; } }
       @keyframes eaglePulse { 0%, 100% { filter: drop-shadow(0 0 4px rgba(106,130,212,0.3)); } 50% { filter: drop-shadow(0 0 12px rgba(106,130,212,0.8)); } }
       .eagle-anim { animation: eaglePulse 3s ease-in-out infinite; }
-      button:active { opacity: 0.85; }
-      a { color: inherit; }
     `}</style>
   );
 }
@@ -778,37 +836,44 @@ function SignalCard({ signal, leverage, budget, riskPct }) {
   const nfColor = nf => nf === "POSITIVE" ? C.buy : nf === "NEGATIVE" ? C.sell : nf === "MIXED" ? C.hold : C.muted;
 
   return (
-    <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 6, overflow: "hidden", borderTop: `2px solid ${ac}` }}>
-      <div style={{ padding: "14px 16px" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+    <div style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, borderRadius: 12, overflow: "hidden", borderTop: `3px solid ${ac}` }}>
+      <div style={{ padding: "18px 20px" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 16, gap: 12 }}>
           <div>
-            <div style={{ fontFamily: "Syne,sans-serif", fontWeight: 800, fontSize: 18, color: "#fff" }}>{signal.asset}</div>
-            <div style={{ fontSize: 10, color: C.muted, marginTop: 1 }}>{signal.assetFull}</div>
-            {signal.currentPrice > 0 && <div style={{ fontSize: 10, color: C.accent, marginTop: 2 }}>${signal.currentPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>}
+            <div className="mono" style={{ fontWeight: 700, fontSize: 22, color: C.text, letterSpacing: "0.02em" }}>{signal.asset}</div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{signal.assetFull}</div>
+            {signal.currentPrice > 0 && (
+              <div className="mono" style={{ fontSize: 14, color: C.accent, marginTop: 6, fontWeight: 600 }}>
+                ${signal.currentPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              </div>
+            )}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ textAlign: "right", fontSize: 10, color: C.muted }}>R:R<br /><span style={{ color: rrC, fontWeight: 700, fontSize: 13 }}>1:{rr}</span></div>
-            <div style={{ fontFamily: "Syne,sans-serif", fontWeight: 800, fontSize: 13, letterSpacing: "0.15em", padding: "5px 12px", borderRadius: 3, border: `1px solid ${ac}`, background: `${ac}22`, color: ac }}>{signal.action}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em" }}>R:R</div>
+              <div className="mono" style={{ color: rrC, fontWeight: 700, fontSize: 15 }}>1:{rr}</div>
+            </div>
+            <div style={{ fontWeight: 700, fontSize: 13, letterSpacing: "0.14em", padding: "7px 14px", borderRadius: 8, border: `1px solid ${ac}`, background: `${ac}22`, color: ac }}>{signal.action}</div>
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, marginBottom: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
           {[
             { label: "Confidence", val: `${signal.confidence}%`, color: ac },
             { label: "Leverage", val: `${signal.suggestedLeverage || leverage}×`, color: C.gold },
-            { label: "Stop Loss", val: `−${slPct}%`, color: C.sell, note: signal.slWasCapped ? "⚠ TIGHTENED" : null },
+            { label: "Stop Loss", val: `−${slPct}%`, color: C.sell, note: signal.slWasCapped ? "Tightened" : null },
             { label: "Take Profit", val: `+${tpPct}%`, color: C.buy },
           ].map(({ label, val, color, note }) => (
-            <div key={label} style={{ background: "rgba(0,0,0,0.2)", borderRadius: 3, padding: "6px 8px" }}>
-              <div style={{ fontSize: 8, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 3 }}>{label}</div>
-              <div style={{ fontSize: 13, fontWeight: 700, color }}>{val}</div>
-              {note && <div style={{ fontSize: 7, color: C.gold, marginTop: 2 }}>{note}</div>}
+            <div key={label} style={{ background: C.surface, borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 5, fontWeight: 600 }}>{label}</div>
+              <div className="mono" style={{ fontSize: 16, fontWeight: 700, color, lineHeight: 1.1 }}>{val}</div>
+              {note && <div style={{ fontSize: 10, color: C.gold, marginTop: 4 }}>⚠ {note}</div>}
             </div>
           ))}
         </div>
 
-        <div style={{ height: 3, background: C.border, borderRadius: 2, overflow: "hidden", marginBottom: 10 }}>
-          <div style={{ height: "100%", width: `${signal.confidence}%`, background: ac }} />
+        <div style={{ height: 4, background: C.border, borderRadius: 2, overflow: "hidden", marginBottom: 14 }}>
+          <div style={{ height: "100%", width: `${signal.confidence}%`, background: ac, transition: "width 0.6s" }} />
         </div>
 
         {signal.institutionalFlow && (
@@ -854,8 +919,8 @@ function SignalCard({ signal, leverage, budget, riskPct }) {
           );
         })()}
 
-        <button onClick={() => setExpanded(e => !e)} style={{ width: "100%", marginTop: 10, padding: "8px", background: "rgba(0,229,255,0.06)", border: `1px solid ${C.border}`, borderRadius: 3, color: C.accent, fontSize: 10, cursor: "pointer", fontFamily: "Space Mono,monospace" }}>
-          {expanded ? "▲ COLLAPSE" : "▼ FULL ANALYSIS"}
+        <button onClick={() => setExpanded(e => !e)} style={{ width: "100%", marginTop: 14, padding: "10px", background: C.accentDim, border: `1px solid ${C.border}`, borderRadius: 8, color: C.accent, fontSize: 13, fontWeight: 600, cursor: "pointer", letterSpacing: "0.04em" }}>
+          {expanded ? "▲ Collapse" : "▼ Full analysis"}
         </button>
       </div>
 
@@ -864,29 +929,29 @@ function SignalCard({ signal, leverage, budget, riskPct }) {
           <TradingChart signal={signal} />
 
           <div>
-            <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>Position Sizing</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.14em", fontWeight: 600, marginBottom: 10 }}>Position Sizing</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               {[
                 { label: "Position Size", val: fmt(pos.positionSize), sub: "Total exposure", color: C.accent },
-                { label: "Margin Required", val: fmt(pos.margin), sub: "Capital to commit", color: "#fff" },
+                { label: "Margin Required", val: fmt(pos.margin), sub: "Capital to commit", color: C.text },
                 { label: "Max Risk", val: `−${fmt(pos.riskAmount)}`, sub: `SL hit (${riskPct}%)`, color: C.sell },
                 { label: "Max Profit", val: `+${fmt(pos.positionSize * tpPct / 100)}`, sub: "TP hit", color: C.buy },
               ].map(({ label, val, sub, color }) => (
-                <div key={label} style={{ background: "rgba(0,0,0,0.3)", border: `1px solid ${C.border}`, borderRadius: 3, padding: "8px 10px" }}>
-                  <div style={{ fontSize: 8, color: C.muted, textTransform: "uppercase", marginBottom: 3 }}>{label}</div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color }}>{val}</div>
-                  <div style={{ fontSize: 8, color: C.muted, marginTop: 2 }}>{sub}</div>
+                <div key={label} style={{ background: C.surface, border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "10px 12px" }}>
+                  <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 5, fontWeight: 600 }}>{label}</div>
+                  <div className="mono" style={{ fontSize: 14, fontWeight: 700, color }}>{val}</div>
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>{sub}</div>
                 </div>
               ))}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
-              <div style={{ background: "rgba(0,0,0,0.3)", border: `1px solid ${C.border}`, borderRadius: 3, padding: "8px 10px" }}>
-                <div style={{ fontSize: 8, color: C.muted, textTransform: "uppercase", marginBottom: 3 }}>Stop Loss Level</div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.sell }}>{signal.stopLossNote || "—"}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+              <div style={{ background: C.surface, border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "10px 12px" }}>
+                <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 5, fontWeight: 600 }}>Stop Loss Level</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.sell, lineHeight: 1.4 }}>{signal.stopLossNote || "—"}</div>
               </div>
-              <div style={{ background: "rgba(0,0,0,0.3)", border: `1px solid ${C.border}`, borderRadius: 3, padding: "8px 10px" }}>
-                <div style={{ fontSize: 8, color: C.muted, textTransform: "uppercase", marginBottom: 3 }}>Take Profit Level</div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.buy }}>{signal.takeProfitNote || "—"}</div>
+              <div style={{ background: C.surface, border: `1px solid ${C.borderSoft}`, borderRadius: 8, padding: "10px 12px" }}>
+                <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 5, fontWeight: 600 }}>Take Profit Level</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.buy, lineHeight: 1.4 }}>{signal.takeProfitNote || "—"}</div>
               </div>
             </div>
           </div>
@@ -966,35 +1031,38 @@ function OutcomePanel({ status }) {
   const borderColor = status.goalMet ? "rgba(0,230,118,0.3)" : "rgba(106,130,212,0.3)";
   const bgColor = status.goalMet ? "rgba(0,230,118,0.06)" : "rgba(106,130,212,0.06)";
   return (
-    <div style={{ background: bgColor, border: `1px solid ${borderColor}`, borderRadius: 4, padding: "12px 14px", marginBottom: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-        <div style={{ fontSize: 9, color: goalColor, textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 700 }}>
-          🎯 OUTCOME LOOP {status.goalMet ? "— GOAL MET ✓" : `— ITERATION ${status.iteration}/3`}
+    <div style={{ background: bgColor, border: `1px solid ${borderColor}`, borderRadius: 10, padding: "14px 16px", marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, color: goalColor, textTransform: "uppercase", letterSpacing: "0.14em", fontWeight: 700 }}>
+          🎯 Outcome loop {status.goalMet ? "— goal met ✓" : `— iteration ${status.iteration}/3`}
         </div>
-        <div style={{ fontSize: 8, color: C.muted }}>Gemini Flash grader · Find ≥1 opportunity</div>
+        <div style={{ fontSize: 11, color: C.muted }}>Gemini Flash grader · Find ≥1 opportunity</div>
       </div>
       {status.criteria && Object.keys(status.criteria).length > 0 && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 4, marginBottom: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 6, marginBottom: 10 }}>
           {Object.entries(status.criteria).map(([k, v]) => (
-            <div key={k} style={{ background: "rgba(0,0,0,0.2)", borderRadius: 2, padding: "4px 6px", display: "flex", alignItems: "center", gap: 4 }}>
-              <span style={{ fontSize: 9, color: v.pass ? C.buy : C.sell }}>{v.pass ? "✓" : "✗"}</span>
-              <span style={{ fontSize: 8, color: C.muted }}>{k}</span>
+            <div key={k} style={{ background: C.surface, borderRadius: 6, padding: "6px 10px", display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 12, color: v.pass ? C.buy : C.sell, fontWeight: 700 }}>{v.pass ? "✓" : "✗"}</span>
+              <span style={{ fontSize: 11, color: C.textDim, fontWeight: 500 }}>{k}</span>
             </div>
           ))}
         </div>
       )}
       {(status.log || []).length > 0 && (
-        <div style={{ display: "flex", gap: 4, marginBottom: status.feedback && !status.goalMet ? 8 : 0, flexWrap: "wrap" }}>
-          {status.log.map((it, i) => (
-            <div key={i} style={{ fontSize: 8, padding: "2px 7px", borderRadius: 2, border: `1px solid ${it.goalMet ? C.buy : it.passed ? C.buy : C.sell}`, color: it.goalMet ? C.buy : it.passed ? C.buy : C.sell }}>
-              Iter {it.iteration}: {it.goalMet ? "GOAL MET" : it.passed ? "PASS" : "FAIL"}
-            </div>
-          ))}
+        <div style={{ display: "flex", gap: 6, marginBottom: status.feedback && !status.goalMet ? 10 : 0, flexWrap: "wrap" }}>
+          {status.log.map((it, i) => {
+            const color = it.goalMet ? C.buy : it.passed ? C.buy : C.sell;
+            return (
+              <div key={i} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 6, border: `1px solid ${color}`, color, fontWeight: 600 }}>
+                Iter {it.iteration}: {it.goalMet ? "GOAL MET" : it.passed ? "PASS" : "FAIL"}
+              </div>
+            );
+          })}
         </div>
       )}
       {status.feedback && !status.goalMet && (
-        <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.5, borderTop: `1px solid rgba(106,130,212,0.2)`, paddingTop: 6 }}>
-          <span style={{ color: C.inst }}>Grader: </span>{status.feedback}
+        <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.6, borderTop: `1px solid rgba(125,146,220,0.18)`, paddingTop: 10 }}>
+          <span style={{ color: C.inst, fontWeight: 600 }}>Grader: </span>{status.feedback}
         </div>
       )}
     </div>
@@ -1035,26 +1103,27 @@ function ManageKeyModal({ onClose, onUpdate }) {
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", backdropFilter: "blur(4px)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
       onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: 24, width: "100%", maxWidth: 400 }}>
-        <div style={{ fontSize: 14, color: C.text, fontWeight: 700, marginBottom: 16 }}>Update API Key</div>
+      <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: 28, width: "100%", maxWidth: 420 }}>
+        <div style={{ fontSize: 18, color: C.text, fontWeight: 700, marginBottom: 8 }}>Update Gemini API Key</div>
+        <div style={{ fontSize: 13, color: C.textDim, marginBottom: 18, lineHeight: 1.6 }}>The key is stored only in this browser.</div>
         <input
           type="password"
           value={keyInput}
           onChange={e => { setKeyInput(e.target.value); setErr(null); }}
           placeholder="AIza…"
           autoFocus
-          style={{ width: "100%", padding: "10px", border: `1px solid ${err ? C.sell : C.border}`, background: C.surface, color: C.accent, borderRadius: 4, fontFamily: "monospace", fontSize: 12, outline: "none", marginBottom: 8, boxSizing: "border-box" }}
+          style={{ borderColor: err ? C.sell : C.border, marginBottom: 10 }}
           onKeyDown={e => e.key === "Enter" && !validating && handleSave()}
         />
-        {err && <p style={{ fontSize: 11, color: C.sell, marginBottom: 10 }}>{err}</p>}
-        {saved && <p style={{ fontSize: 11, color: C.buy, marginBottom: 10 }}>✓ Key updated!</p>}
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={handleSave} disabled={validating} style={{ flex: 1, padding: "10px", background: C.accent, color: "#000", border: "none", borderRadius: 4, fontFamily: "Syne,sans-serif", fontWeight: 700, cursor: validating ? "not-allowed" : "pointer" }}>
+        {err && <p style={{ fontSize: 13, color: C.sell, marginBottom: 12, lineHeight: 1.55 }}>⚠ {err}</p>}
+        {saved && <p style={{ fontSize: 13, color: C.buy, marginBottom: 12 }}>✓ Key updated</p>}
+        <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
+          <button onClick={handleSave} disabled={validating} style={{ flex: 1, padding: "12px 16px", background: validating ? C.surface : C.accent, color: validating ? C.muted : "#001318", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 14, letterSpacing: "0.02em", cursor: validating ? "not-allowed" : "pointer" }}>
             {validating ? "Validating…" : "Save"}
           </button>
-          <button onClick={onClose} style={{ padding: "10px 16px", background: "transparent", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 4, cursor: "pointer", fontFamily: "monospace", fontSize: 12 }}>Cancel</button>
+          <button onClick={onClose} style={{ padding: "12px 18px", background: "transparent", color: C.textDim, border: `1px solid ${C.border}`, borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 500 }}>Cancel</button>
         </div>
       </div>
     </div>
@@ -1066,36 +1135,72 @@ function CategoryRow({ category, selectedTickers, onToggleTicker, onRemoveTicker
   const [input, setInput] = useState("");
   const handleAdd = () => {
     if (!input.trim()) return;
-    if (onAddTicker(input)) setInput("");
-    else setInput("");
+    onAddTicker(input);
+    setInput("");
   };
   return (
-    <div style={{ marginBottom: 20 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <button onClick={onRename} title="Rename category" style={{ background: "transparent", border: "none", color: C.muted, fontSize: 9, textTransform: "uppercase", letterSpacing: "0.1em", cursor: "pointer", padding: 0, fontFamily: "Space Mono,monospace" }}>
-          {category.name} <span style={{ opacity: 0.5 }}>✎</span>
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <button onClick={onRename} title="Rename category" style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, cursor: "pointer", padding: 0, display: "inline-flex", alignItems: "center", gap: 6 }}>
+          {category.name} <span style={{ opacity: 0.45, fontSize: 11 }}>✎</span>
         </button>
-        <button onClick={onDelete} title="Delete category" style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.muted, fontSize: 10, borderRadius: 3, cursor: "pointer", padding: "2px 8px", fontFamily: "Space Mono,monospace" }}>✕</button>
+        <button onClick={onDelete} title="Delete category" style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.muted, fontSize: 12, borderRadius: 6, cursor: "pointer", padding: "4px 10px", lineHeight: 1 }}>✕</button>
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
         {category.tickers.map(t => {
           const selected = selectedTickers.has(t);
           return (
-            <span key={t} style={{ display: "inline-flex", alignItems: "center", border: `1px solid ${selected ? C.accent : C.border}`, background: selected ? "rgba(0,229,255,0.1)" : "transparent", borderRadius: 3, overflow: "hidden" }}>
-              <button onClick={() => onToggleTicker(t)} style={{ padding: "7px 10px", background: "transparent", border: "none", color: selected ? C.accent : C.muted, fontSize: 11, cursor: "pointer", fontFamily: "Space Mono,monospace" }}>{t}</button>
-              <button onClick={() => onRemoveTicker(t)} title="Remove from category" style={{ padding: "7px 8px", background: "transparent", border: "none", borderLeft: `1px solid ${selected ? C.accent : C.border}`, color: C.muted, fontSize: 10, cursor: "pointer" }}>✕</button>
+            <span key={t} style={{
+              display: "inline-flex", alignItems: "center",
+              border: `1px solid ${selected ? C.accent : C.border}`,
+              background: selected ? C.accentDim : C.surface,
+              borderRadius: 8, overflow: "hidden",
+              transition: "border-color 0.15s, background 0.15s",
+            }}>
+              <button
+                onClick={() => onToggleTicker(t)}
+                className="mono"
+                style={{
+                  padding: "8px 12px", background: "transparent", border: "none",
+                  color: selected ? C.accent : C.text,
+                  fontSize: 13, fontWeight: selected ? 600 : 500,
+                  cursor: "pointer", letterSpacing: "0.02em",
+                }}
+              >{t}</button>
+              <button
+                onClick={() => onRemoveTicker(t)} title="Remove from category"
+                style={{
+                  padding: "8px 10px", background: "transparent", border: "none",
+                  borderLeft: `1px solid ${selected ? C.accent : C.border}`,
+                  color: C.muted, fontSize: 12, cursor: "pointer", lineHeight: 1,
+                }}
+              >✕</button>
             </span>
           );
         })}
-        <span style={{ display: "inline-flex", alignItems: "center", border: `1px dashed ${C.border}`, borderRadius: 3 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", border: `1px dashed ${C.border}`, borderRadius: 8, background: "transparent" }}>
           <input
             value={input}
             onChange={e => setInput(e.target.value.toUpperCase())}
             onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleAdd(); } }}
             placeholder="+ TICKER"
-            style={{ width: 90, padding: "6px 8px", background: "transparent", border: "none", color: C.accent, fontSize: 11, fontFamily: "Space Mono,monospace", outline: "none" }}
+            className="mono"
+            style={{
+              width: 110, padding: "8px 12px", background: "transparent",
+              border: "none", color: C.text, fontSize: 13, outline: "none",
+              borderRadius: 0,
+            }}
           />
-          <button onClick={handleAdd} disabled={!input.trim()} style={{ padding: "6px 10px", background: "transparent", border: "none", borderLeft: `1px dashed ${C.border}`, color: input.trim() ? C.accent : C.muted, fontSize: 11, cursor: input.trim() ? "pointer" : "not-allowed", fontFamily: "Space Mono,monospace" }}>Add</button>
+          <button
+            onClick={handleAdd} disabled={!input.trim()}
+            style={{
+              padding: "8px 14px", background: "transparent", border: "none",
+              borderLeft: `1px dashed ${C.border}`,
+              color: input.trim() ? C.accent : C.muted,
+              fontSize: 13, fontWeight: 600,
+              cursor: input.trim() ? "pointer" : "not-allowed",
+            }}
+          >Add</button>
         </span>
       </div>
     </div>
@@ -1384,57 +1489,65 @@ ohlcv: exactly 20 candles ending near current price. Never fabricate specific do
   };
 
   return (
-    <div style={{ background: C.bg, color: C.text, fontFamily: "'Space Mono',monospace", height: "100vh", display: "flex", flexDirection: "column", fontSize: 12, overflow: "hidden" }}>
+    <div style={{ background: C.bg, color: C.text, height: "100vh", display: "flex", flexDirection: "column", fontSize: 14, overflow: "hidden" }}>
       <GlobalStyles />
       {showKeyModal && <ManageKeyModal onClose={() => setShowKeyModal(false)} onUpdate={onUpdateKey} />}
 
       {loading && (
-        <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, height: 40, background: "rgba(7,10,15,0.97)", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10, padding: "0 16px", backdropFilter: "blur(8px)" }}>
-          <div style={{ width: 12, height: 12, border: `2px solid ${C.border}`, borderTopColor: C.accent, borderRadius: "50%", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
-          <span style={{ fontSize: 10, color: C.accent, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{loaderStep}</span>
-          <div style={{ width: 80, height: 2, background: C.border, borderRadius: 1, overflow: "hidden", flexShrink: 0 }}>
-            <div style={{ height: "100%", background: `linear-gradient(90deg,${C.accent},#39ff14)`, animation: "progress 1.5s ease-in-out infinite" }} />
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, height: 44, background: "rgba(11,15,20,0.95)", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 12, padding: "0 20px", backdropFilter: "blur(10px)" }}>
+          <div style={{ width: 14, height: 14, border: `2px solid ${C.border}`, borderTopColor: C.accent, borderRadius: "50%", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
+          <span style={{ fontSize: 13, color: C.accent, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>{loaderStep}</span>
+          <div style={{ width: 100, height: 3, background: C.border, borderRadius: 2, overflow: "hidden", flexShrink: 0 }}>
+            <div style={{ height: "100%", background: C.accent, animation: "progress 1.5s ease-in-out infinite" }} />
           </div>
         </div>
       )}
-      {loading && <div style={{ height: 40, flexShrink: 0 }} />}
+      {loading && <div style={{ height: 44, flexShrink: 0 }} />}
 
-      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, background: "linear-gradient(135deg,#0f1018,#151722,#0f1018)", flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div className="eagle-anim"><Eagle size={36} /></div>
+      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", borderBottom: `1px solid ${C.borderSoft}`, background: C.bg, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div className="eagle-anim"><Eagle size={32} /></div>
           <div>
-            <div style={{ fontFamily: "Syne,sans-serif", fontWeight: 800, fontSize: 16, letterSpacing: "0.2em", color: "#c8d0e0" }}>APEX EAGLE</div>
-            <div style={{ fontSize: 8, color: "#6a5fa8", letterSpacing: "0.1em", marginTop: 1 }}>{user.email}</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, letterSpacing: "0.18em", color: C.text }}>APEX EAGLE</div>
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{user.email}</div>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {sentiment && <div style={{ fontFamily: "Syne,sans-serif", fontWeight: 800, fontSize: 18, color: sentColor }}>{sentiment.score}<span style={{ fontSize: 8, color: C.muted, marginLeft: 4 }}>{sentiment.label}</span></div>}
-          <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#39ff14", boxShadow: "0 0 6px #39ff14", animation: "pulse 2s infinite" }} />
-          <button onClick={onLogout} style={{ padding: "5px 10px", background: "transparent", border: `1px solid ${C.border}`, color: C.muted, fontSize: 9, borderRadius: 3, cursor: "pointer", fontFamily: "monospace" }}>Sign out</button>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          {sentiment && (
+            <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+              <span className="mono" style={{ fontWeight: 700, fontSize: 20, color: sentColor }}>{sentiment.score}</span>
+              <span style={{ fontSize: 10, color: C.muted, letterSpacing: "0.1em", textTransform: "uppercase" }}>{sentiment.label}</span>
+            </div>
+          )}
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.buy, boxShadow: `0 0 8px ${C.buy}`, animation: "pulse 2s infinite" }} />
+          <button onClick={onLogout} style={{ padding: "6px 12px", background: "transparent", border: `1px solid ${C.border}`, color: C.textDim, fontSize: 12, borderRadius: 6, cursor: "pointer", fontWeight: 500 }}>Sign out</button>
         </div>
       </header>
 
       <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
         {tab === "signals" && (
-          <div style={{ flex: 1, overflowY: "auto", padding: "12px 12px 90px" }}>
-            {error && <div style={{ background: "rgba(255,61,113,0.08)", border: `1px solid rgba(255,61,113,0.3)`, borderRadius: 3, padding: "10px 12px", fontSize: 10, color: C.sell, marginBottom: 10 }}>⚠ {error}</div>}
+          <div style={{ flex: 1, overflowY: "auto", padding: "20px 16px 110px", maxWidth: 720, margin: "0 auto", width: "100%" }}>
+            {error && (
+              <div style={{ background: "rgba(255,92,124,0.08)", border: `1px solid rgba(255,92,124,0.3)`, borderRadius: 8, padding: "12px 14px", fontSize: 13, color: C.sell, marginBottom: 14, lineHeight: 1.55 }}>⚠ {error}</div>
+            )}
             <OutcomePanel status={outcomeStatus} />
             {!signals.length && !loading && !error && !outcomeStatus && (
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", paddingTop: 60, gap: 16, textAlign: "center" }}>
-                <div className="eagle-anim" style={{ opacity: 0.4 }}><Eagle size={64} /></div>
-                <div style={{ fontFamily: "Syne,sans-serif", fontSize: 16, color: C.text }}>SELECT ASSETS & ANALYZE</div>
-                <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.8, maxWidth: 280 }}>Go to Settings, pick assets and risk params, then hit Analyze.<br />A Gemini Flash grader verifies every result before showing it.</div>
-                <button onClick={() => setTab("settings")} style={{ padding: "10px 24px", background: C.accent, color: "#000", border: "none", fontFamily: "Syne,sans-serif", fontWeight: 700, fontSize: 12, borderRadius: 3, cursor: "pointer" }}>⚙ OPEN SETTINGS</button>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", paddingTop: 72, gap: 20, textAlign: "center" }}>
+                <div className="eagle-anim" style={{ opacity: 0.45 }}><Eagle size={64} /></div>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 22, fontWeight: 700, color: C.text, letterSpacing: "0.04em" }}>Select assets &amp; analyze</div>
+                <div style={{ fontSize: 14, color: C.textDim, lineHeight: 1.7, maxWidth: 320 }}>Go to Settings, pick tickers and risk parameters, then run the analysis. A Gemini Flash grader verifies every result before showing it.</div>
+                <button onClick={() => setTab("settings")} style={{ padding: "12px 28px", background: C.accent, color: "#001318", border: "none", fontWeight: 700, fontSize: 14, letterSpacing: "0.06em", borderRadius: 10, cursor: "pointer" }}>⚙ Open Settings</button>
               </div>
             )}
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               {signals.map((sig, i) => <SignalCard key={`${sig.asset}-${i}`} signal={sig} leverage={leverage} budget={budget} riskPct={riskPct} />)}
             </div>
           </div>
         )}
 
         {tab === "settings" && (
-          <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 90px" }}>
+          <div style={{ flex: 1, overflowY: "auto", padding: "24px 20px 110px", maxWidth: 720, margin: "0 auto", width: "100%" }}>
+            <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.14em", fontWeight: 600, marginBottom: 14 }}>Watchlist</div>
             {categories.map(cat => (
               <CategoryRow
                 key={cat.id}
@@ -1447,87 +1560,116 @@ ohlcv: exactly 20 candles ending near current price. Never fabricate specific do
                 onDelete={() => deleteCategory(cat.id)}
               />
             ))}
-            <button onClick={addCategory} style={{ padding: "8px 14px", background: "transparent", border: `1px dashed ${C.border}`, color: C.muted, borderRadius: 3, fontFamily: "Space Mono,monospace", fontSize: 11, cursor: "pointer", marginBottom: 20 }}>
+            <button onClick={addCategory} style={{ padding: "10px 16px", background: "transparent", border: `1px dashed ${C.border}`, color: C.textDim, borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: "pointer", marginBottom: 28 }}>
               + Add category
             </button>
-            <div style={{ height: 1, background: C.border, marginBottom: 20 }} />
-            <div style={{ display: "grid", gap: 16, marginBottom: 20 }}>
-              <div><div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>Portfolio Budget</div><input type="number" value={budget} min={100} step={500} onChange={e => setBudget(parseFloat(e.target.value) || 10000)} /></div>
-              <div><div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>Risk Per Trade</div><select value={riskPct} onChange={e => setRiskPct(parseFloat(e.target.value))}>{RISK_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select></div>
+
+            <div style={{ height: 1, background: C.borderSoft, marginBottom: 24 }} />
+
+            <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.14em", fontWeight: 600, marginBottom: 16 }}>Portfolio</div>
+            <div style={{ display: "grid", gap: 20, marginBottom: 24 }}>
               <div>
-                <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>Max Leverage — <span style={{ color: C.gold, fontWeight: 700 }}>{leverage}×</span></div>
+                <label style={{ display: "block", fontSize: 13, color: C.textDim, marginBottom: 8, fontWeight: 500 }}>Portfolio Value</label>
+                <input type="number" value={budget} min={100} step={500} onChange={e => setBudget(parseFloat(e.target.value) || 10000)} />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: 13, color: C.textDim, marginBottom: 8, fontWeight: 500 }}>Risk Per Trade</label>
+                <select value={riskPct} onChange={e => setRiskPct(parseFloat(e.target.value))}>{RISK_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
+              </div>
+              <div>
+                <label style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", fontSize: 13, color: C.textDim, marginBottom: 10, fontWeight: 500 }}>
+                  <span>Max Leverage</span>
+                  <span className="mono" style={{ color: C.gold, fontWeight: 700, fontSize: 15 }}>{leverage}×</span>
+                </label>
                 <input type="range" min={1} max={5} step={1} value={leverage} onChange={e => setLeverage(parseInt(e.target.value))} />
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 8, color: C.muted, marginTop: 4 }}>{[1, 2, 3, 4, 5].map(v => <span key={v} style={{ color: v === leverage ? C.gold : C.muted }}>{v}×</span>)}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.muted, marginTop: 8 }}>
+                  {[1, 2, 3, 4, 5].map(v => <span key={v} className="mono" style={{ color: v === leverage ? C.gold : C.muted, fontWeight: v === leverage ? 700 : 500 }}>{v}×</span>)}
+                </div>
               </div>
             </div>
 
-            <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 4, padding: "12px 14px", marginBottom: 16 }}>
-              <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>Analysis Summary</div>
-              <div style={{ fontSize: 11, color: C.text, marginBottom: 4 }}>{selectedAssets.length} asset{selectedAssets.length !== 1 ? "s" : ""} selected</div>
-              <div style={{ fontSize: 10, color: C.muted }}>Budget: {fmt(budget)} · Risk: {riskPct}% · Leverage: {leverage}×</div>
-              <div style={{ fontSize: 10, color: C.muted, marginTop: 3 }}>Max loss/trade: {fmt(budget * riskPct / 100)}</div>
+            <div style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+              <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.14em", fontWeight: 600, marginBottom: 10 }}>Analysis Summary</div>
+              <div style={{ fontSize: 15, color: C.text, fontWeight: 600, marginBottom: 6 }}>{selectedAssets.length} asset{selectedAssets.length !== 1 ? "s" : ""} selected</div>
+              <div style={{ fontSize: 13, color: C.textDim, lineHeight: 1.7 }}>
+                <span className="mono">{fmt(budget)}</span> · <span className="mono">{riskPct}%</span> risk · <span className="mono">{leverage}×</span> leverage
+              </div>
+              <div style={{ fontSize: 13, color: C.muted, marginTop: 6 }}>Max loss per trade: <span className="mono" style={{ color: C.sell }}>−{fmt(budget * riskPct / 100)}</span></div>
             </div>
 
             {user.email !== SPECIAL_USER_EMAIL && (
-              <button onClick={() => setShowKeyModal(true)} style={{ width: "100%", padding: "10px", background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 4, fontFamily: "monospace", fontSize: 11, cursor: "pointer", marginBottom: 12 }}>
+              <button onClick={() => setShowKeyModal(true)} style={{ width: "100%", padding: "12px 16px", background: "transparent", border: `1px solid ${C.border}`, color: C.textDim, borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: "pointer", marginBottom: 16 }}>
                 🔑 Update Gemini API Key
               </button>
             )}
 
-            <div style={{ background: "rgba(106,130,212,0.06)", border: "1px solid rgba(106,130,212,0.25)", borderRadius: 3, padding: "10px 12px", marginBottom: 12, fontSize: 10, color: "rgba(106,130,212,0.8)", lineHeight: 1.6 }}>
-              🎯 OUTCOMES LOOP — Gemini 2.5 Pro generates signals · Gemini 2.5 Flash grader verifies (≥1 opportunity, conf ≥65%, tight SL, R:R ≥1.5) · Up to 3 iterations.
+            <div style={{ background: "rgba(125,146,220,0.08)", border: "1px solid rgba(125,146,220,0.22)", borderRadius: 8, padding: "12px 14px", marginBottom: 12, fontSize: 13, color: C.inst, lineHeight: 1.6 }}>
+              🎯 <strong style={{ fontWeight: 600 }}>Outcome loop</strong> — Gemini 2.5 Pro generates signals, Gemini 2.5 Flash grader verifies (≥1 opportunity, conf ≥65%, tight SL, R:R ≥1.5). Up to 3 iterations.
             </div>
-            <div style={{ background: "rgba(255,214,0,0.06)", border: "1px solid rgba(255,214,0,0.25)", borderRadius: 3, padding: "10px 12px", marginBottom: 16, fontSize: 10, color: "rgba(255,214,0,0.7)", lineHeight: 1.6 }}>
+            <div style={{ background: "rgba(240,193,75,0.07)", border: "1px solid rgba(240,193,75,0.22)", borderRadius: 8, padding: "12px 14px", marginBottom: 20, fontSize: 13, color: C.hold, lineHeight: 1.6 }}>
               ⚠ AI signals are informational only. Day trading carries substantial risk. Never invest more than you can afford to lose.
             </div>
-            <button onClick={runAnalysis} disabled={loading || !selectedAssets.length} style={{ width: "100%", padding: "14px", background: loading || !selectedAssets.length ? C.muted : C.accent, color: "#000", border: "none", fontFamily: "Syne,sans-serif", fontWeight: 800, fontSize: 14, letterSpacing: "0.15em", cursor: loading || !selectedAssets.length ? "not-allowed" : "pointer", borderRadius: 4, textTransform: "uppercase" }}>
-              {loading ? "ANALYZING…" : "▶ ANALYZE NOW"}
+            <button
+              onClick={runAnalysis}
+              disabled={loading || !selectedAssets.length}
+              style={{
+                width: "100%", padding: "16px",
+                background: loading || !selectedAssets.length ? C.surface : C.accent,
+                color: loading || !selectedAssets.length ? C.muted : "#001318",
+                border: "none", fontWeight: 700, fontSize: 14, letterSpacing: "0.14em",
+                cursor: loading || !selectedAssets.length ? "not-allowed" : "pointer",
+                borderRadius: 10, textTransform: "uppercase",
+                transition: "background 0.15s",
+              }}
+            >
+              {loading ? "Analyzing…" : "▶ Analyze Now"}
             </button>
           </div>
         )}
 
         {tab === "log" && (
-          <div style={{ flex: 1, overflowY: "auto", padding: "16px 12px 90px" }}>
+          <div style={{ flex: 1, overflowY: "auto", padding: "24px 16px 110px", maxWidth: 720, margin: "0 auto", width: "100%" }}>
             {sentiment && (
-              <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 4, padding: "14px 16px", marginBottom: 12, textAlign: "center" }}>
-                <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>Market Sentiment</div>
-                <div style={{ fontFamily: "Syne,sans-serif", fontSize: 48, fontWeight: 800, color: sentColor, lineHeight: 1 }}>{sentiment.score}</div>
-                <div style={{ fontSize: 10, color: C.muted, letterSpacing: "0.15em", marginTop: 4 }}>{sentiment.label}</div>
+              <div style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, borderRadius: 12, padding: "20px 16px", marginBottom: 14, textAlign: "center" }}>
+                <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.14em", fontWeight: 600, marginBottom: 12 }}>Market Sentiment</div>
+                <div className="mono" style={{ fontSize: 56, fontWeight: 700, color: sentColor, lineHeight: 1 }}>{sentiment.score}</div>
+                <div style={{ fontSize: 12, color: C.textDim, letterSpacing: "0.14em", marginTop: 8, fontWeight: 600 }}>{sentiment.label}</div>
               </div>
             )}
             {riskSummary && (
-              <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 4, padding: "14px 16px", marginBottom: 12 }}>
-                <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 10 }}>Portfolio Risk</div>
+              <div style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, borderRadius: 12, padding: "18px 18px", marginBottom: 14 }}>
+                <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.14em", fontWeight: 600, marginBottom: 14 }}>Portfolio Risk</div>
                 {[
-                  { label: "Budget", val: fmt(budget), color: "#fff" },
-                  { label: "Active Signals", val: `${riskSummary.activeCount}/${riskSummary.total}`, color: "#fff" },
+                  { label: "Budget", val: fmt(budget), color: C.text },
+                  { label: "Active Signals", val: `${riskSummary.activeCount}/${riskSummary.total}`, color: C.text },
                   { label: "Total Margin", val: fmt(riskSummary.totalMargin), color: riskSummary.totalMargin > budget * 0.8 ? C.sell : C.hold },
                   { label: "Max Loss", val: `−${fmt(riskSummary.totalRisk)}`, color: C.sell },
                   { label: "Portfolio at Risk", val: `${(riskSummary.totalRisk / budget * 100).toFixed(1)}%`, color: (riskSummary.totalRisk / budget * 100) > 15 ? C.sell : (riskSummary.totalRisk / budget * 100) > 8 ? C.hold : C.buy },
-                ].map(({ label, val, color }) => (
-                  <div key={label} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "5px 0", borderBottom: `1px solid ${C.border}` }}>
-                    <span style={{ color: C.muted }}>{label}</span><span style={{ fontWeight: 700, color }}>{val}</span>
+                ].map(({ label, val, color }, i, arr) => (
+                  <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 14, padding: "10px 0", borderBottom: i === arr.length - 1 ? "none" : `1px solid ${C.borderSoft}` }}>
+                    <span style={{ color: C.textDim }}>{label}</span>
+                    <span className="mono" style={{ fontWeight: 700, color, fontSize: 15 }}>{val}</span>
                   </div>
                 ))}
-                <div style={{ height: 5, background: C.border, borderRadius: 3, marginTop: 10, overflow: "hidden" }}>
+                <div style={{ height: 6, background: C.surface, borderRadius: 3, marginTop: 14, overflow: "hidden" }}>
                   <div style={{ height: "100%", width: `${Math.min(100, riskSummary.totalRisk / budget * 400)}%`, background: (riskSummary.totalRisk / budget * 100) > 15 ? C.sell : (riskSummary.totalRisk / budget * 100) > 8 ? C.hold : C.buy, transition: "width 0.8s" }} />
                 </div>
               </div>
             )}
-            <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 10 }}>Signal Log</div>
+            <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.14em", fontWeight: 600, marginBottom: 12 }}>Signal Log</div>
             {signalLog.length === 0
-              ? <div style={{ fontSize: 11, color: C.muted, textAlign: "center", padding: "30px 0" }}>No signals yet</div>
+              ? <div style={{ fontSize: 14, color: C.muted, textAlign: "center", padding: "40px 0" }}>No signals yet</div>
               : signalLog.map((s, i) => {
                 const c = actionColor(s.action);
                 return (
-                  <div key={i} style={{ background: C.panel, border: `1px solid ${C.border}`, borderLeft: `3px solid ${c}`, borderRadius: 3, padding: "10px 12px", marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div key={i} style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, borderLeft: `3px solid ${c}`, borderRadius: 8, padding: "12px 14px", marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div>
-                      <div style={{ fontWeight: 700, color: "#fff", fontSize: 13 }}>{s.asset}</div>
-                      <div style={{ fontSize: 9, color: C.muted }}>{s.time} · {s.confidence}% conf · {s.suggestedLeverage}× lev</div>
-                      {s.currentPrice > 0 && <div style={{ fontSize: 9, color: C.accent }}>${s.currentPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>}
-                      {s.institutionalFlow && <div style={{ fontSize: 8, color: C.inst, marginTop: 1 }}>🏛 {s.institutionalFlow.overallBias} · Score: {s.institutionalFlow.flowScore}</div>}
+                      <div className="mono" style={{ fontWeight: 700, color: C.text, fontSize: 15 }}>{s.asset}</div>
+                      <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{s.time} · {s.confidence}% conf · {s.suggestedLeverage}× lev</div>
+                      {s.currentPrice > 0 && <div className="mono" style={{ fontSize: 12, color: C.accent, marginTop: 2 }}>${s.currentPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>}
+                      {s.institutionalFlow && <div style={{ fontSize: 11, color: C.inst, marginTop: 2 }}>🏛 {s.institutionalFlow.overallBias} · Score: {s.institutionalFlow.flowScore}</div>}
                     </div>
-                    <div style={{ fontSize: 11, padding: "3px 10px", borderRadius: 2, fontWeight: 700, background: `${c}22`, color: c, border: `1px solid ${c}` }}>{s.action}</div>
+                    <div style={{ fontSize: 12, padding: "5px 12px", borderRadius: 6, fontWeight: 700, background: `${c}22`, color: c, border: `1px solid ${c}`, letterSpacing: "0.05em" }}>{s.action}</div>
                   </div>
                 );
               })}
@@ -1535,17 +1677,20 @@ ohlcv: exactly 20 candles ending near current price. Never fabricate specific do
         )}
       </div>
 
-      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, display: "flex", background: "rgba(7,10,15,0.97)", borderTop: `1px solid ${C.border}`, backdropFilter: "blur(12px)", zIndex: 100, paddingBottom: "env(safe-area-inset-bottom,0px)" }}>
-        {[{ id: "signals", icon: "📊", label: "Signals" }, { id: "settings", icon: "⚙️", label: "Settings" }, { id: "log", icon: "📋", label: "Portfolio" }].map(({ id, icon, label }) => (
-          <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: "10px 0 8px", background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, position: "relative" }}>
-            <span style={{ fontSize: 20 }}>{icon}</span>
-            <span style={{ fontSize: 8, color: tab === id ? C.accent : C.muted, textTransform: "uppercase", fontFamily: "Space Mono,monospace" }}>{label}</span>
-            {tab === id && <div style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", width: 32, height: 2, background: C.accent, borderRadius: 1 }} />}
-          </button>
-        ))}
-        <button onClick={runAnalysis} disabled={loading} style={{ flex: 1.2, padding: "8px 0", background: loading ? C.muted : C.accent, border: "none", cursor: loading ? "not-allowed" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, borderRadius: "4px 4px 0 0", margin: "0 4px" }}>
-          <span style={{ fontSize: 16 }}>{loading ? "⏳" : "▶"}</span>
-          <span style={{ fontSize: 8, color: "#000", fontWeight: 700, fontFamily: "Space Mono,monospace" }}>{loading ? "WORKING" : "ANALYZE"}</span>
+      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, display: "flex", alignItems: "stretch", background: "rgba(11,15,20,0.95)", borderTop: `1px solid ${C.borderSoft}`, backdropFilter: "blur(12px)", zIndex: 100, paddingBottom: "env(safe-area-inset-bottom,0px)" }}>
+        {[{ id: "signals", icon: "📊", label: "Signals" }, { id: "settings", icon: "⚙️", label: "Settings" }, { id: "log", icon: "📋", label: "Portfolio" }].map(({ id, icon, label }) => {
+          const active = tab === id;
+          return (
+            <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: "12px 0 10px", background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, position: "relative" }}>
+              <span style={{ fontSize: 20, opacity: active ? 1 : 0.55, transition: "opacity 0.15s" }}>{icon}</span>
+              <span style={{ fontSize: 11, color: active ? C.accent : C.muted, fontWeight: active ? 600 : 500, letterSpacing: "0.05em" }}>{label}</span>
+              {active && <div style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", width: 36, height: 2, background: C.accent, borderRadius: 2 }} />}
+            </button>
+          );
+        })}
+        <button onClick={runAnalysis} disabled={loading} style={{ flex: 1.3, padding: "10px 0", background: loading ? C.surface : C.accent, border: "none", cursor: loading ? "not-allowed" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, margin: "6px 6px", borderRadius: 8, transition: "background 0.15s" }}>
+          <span style={{ fontSize: 16, color: loading ? C.muted : "#001318" }}>{loading ? "⏳" : "▶"}</span>
+          <span style={{ fontSize: 11, color: loading ? C.muted : "#001318", fontWeight: 700, letterSpacing: "0.08em" }}>{loading ? "WORKING" : "ANALYZE"}</span>
         </button>
       </nav>
     </div>
