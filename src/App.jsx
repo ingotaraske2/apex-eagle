@@ -16,19 +16,11 @@ const SPECIAL_USER_EMAIL   = "ingo.taraske@gmail.com";
 const SPECIAL_USER_API_KEY = import.meta.env.VITE_SPECIAL_USER_KEY || "";
 
 // ── CONSTANTS ─────────────────────────────────────────────────────────────────
-const AI_ASSETS = [
-  { id: "NVDA", label: "NVDA" }, { id: "MSFT", label: "MSFT" },
-  { id: "GOOGL", label: "GOOGL" }, { id: "META", label: "META" },
-  { id: "AMD", label: "AMD" }, { id: "PLTR", label: "PLTR" },
-  { id: "SMCI", label: "SMCI" }, { id: "SOUN", label: "SOUN" },
+const DEFAULT_CATEGORIES = [
+  { id: "ai", name: "AI", tickers: ["NVDA", "MSFT", "GOOGL", "META", "AMD", "PLTR", "SMCI", "SOUN"] },
+  { id: "energy", name: "Energy & Commodities", tickers: ["XOM", "CVX", "COP", "OXY", "SLB", "BP", "FANG", "Gold", "CrudeOil"] },
 ];
-const ENERGY_ASSETS = [
-  { id: "XOM", label: "XOM" }, { id: "CVX", label: "CVX" },
-  { id: "COP", label: "COP" }, { id: "OXY", label: "OXY" },
-  { id: "SLB", label: "SLB" }, { id: "BP", label: "BP" },
-  { id: "FANG", label: "FANG" }, { id: "Gold", label: "GOLD" },
-  { id: "CrudeOil", label: "OIL" },
-];
+const DEFAULT_SELECTED = ["NVDA", "MSFT"];
 const RISK_OPTIONS = [
   { value: 1, label: "1% Conservative" }, { value: 2, label: "2% Moderate" },
   { value: 3, label: "3% Aggressive" }, { value: 5, label: "5% High Risk" },
@@ -59,6 +51,15 @@ Grade each criterion PASS or FAIL. If any fail, explain exactly what the agent m
 const fmt = n => "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const actionColor = a => a === "BUY" ? C.buy : a === "SELL" ? C.sell : C.hold;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function loadJSON(key, fallback) {
+  try { const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); }
+  catch { return fallback; }
+}
+function saveJSON(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ }
+}
+const randomId = () => Math.random().toString(36).slice(2, 9);
 
 function calcPositionSize(budget, riskPct, slPct, leverage) {
   const riskAmount = budget * (riskPct / 100);
@@ -171,22 +172,45 @@ async function signOutFirebase() {
   await signOut(auth);
 }
 
-// ── API (with retry + per-call apiKey injection) ───────────────────────────────
+// ── API (Gemini, with retry + per-call apiKey injection) ──────────────────────
+// Accepts an Anthropic-shaped body { model, max_tokens, tools, messages } for
+// call-site stability, translates to Gemini's generateContent shape, and returns
+// a response whose .content[].text mirrors Anthropic so call sites can keep
+// data.content.filter(b => b.type === "text").map(b => b.text).join("").
 async function callApi(apiKey, body, retries = 3) {
-  const { model = "claude-sonnet-4-20250514", ...rest } = body;
+  const {
+    model = "gemini-2.5-pro",
+    max_tokens,
+    tools,
+    messages = [],
+  } = body;
+
+  const contents = messages.map(m => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: typeof m.content === "string" ? m.content : (m.content?.[0]?.text || "") }],
+  }));
+  const geminiBody = {
+    contents,
+    generationConfig: {
+      ...(max_tokens ? { maxOutputTokens: max_tokens } : {}),
+      temperature: 0.7,
+    },
+  };
+  // Anthropic-style web_search tool → Gemini google_search grounding
+  if (Array.isArray(tools) && tools.some(t => t?.type?.startsWith("web_search") || t?.name === "web_search")) {
+    geminiBody.tools = [{ google_search: {} }];
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
-        body: JSON.stringify({ model, ...rest }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(geminiBody),
       });
-      if ([500, 503, 529].includes(res.status)) {
+      if ([500, 502, 503, 504].includes(res.status)) {
         if (attempt < retries) { await sleep(1500 * Math.pow(2, attempt)); continue; }
         throw new Error(`Server error (${res.status}). Try again.`);
       }
@@ -194,10 +218,15 @@ async function callApi(apiKey, body, retries = 3) {
         if (attempt < retries) { await sleep(3000 * Math.pow(2, attempt)); continue; }
         throw new Error("Rate limited. Wait a few seconds.");
       }
-      if (res.status === 401) throw new Error("Invalid API key. Check your Anthropic key in Settings.");
+      if (res.status === 401 || res.status === 403) {
+        throw new Error("Invalid API key. Check your Gemini key in Settings.");
+      }
       const data = await res.json();
       if (data.error) throw new Error(data.error.message || "API error");
-      return data;
+      const text = (data.candidates?.[0]?.content?.parts || [])
+        .map(p => p.text || "")
+        .join("");
+      return { content: [{ type: "text", text }], _raw: data };
     } catch (err) {
       if (attempt < retries && !err.message.includes("Rate limited") && !err.message.includes("Invalid API key")) {
         await sleep(1000 * Math.pow(2, attempt));
@@ -267,7 +296,7 @@ function LoginScreen({ onSignIn }) {
         <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: "10px", padding: "32px", marginBottom: "20px" }}>
           <p style={{ fontSize: "13px", color: C.text, lineHeight: "1.8", marginBottom: "28px" }}>
             Sign in with your Google account to get started. Everyone can use APEX Eagle — you just need a free{" "}
-            <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" style={{ color: C.accent }}>Anthropic API key</a>.
+            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{ color: C.accent }}>Google Gemini API key</a>.
           </p>
 
           <button
@@ -324,27 +353,28 @@ function ApiKeyPrompt({ user, onSetKey, onLogout }) {
 
   const handleSubmit = async () => {
     const trimmed = keyInput.trim();
-    if (!trimmed) { setKeyError("Please enter your Anthropic API key."); return; }
-    if (!trimmed.startsWith("sk-ant-")) { setKeyError("That doesn't look like an Anthropic key (should start with sk-ant-)."); return; }
+    if (!trimmed) { setKeyError("Please enter your Gemini API key."); return; }
+    if (!trimmed.startsWith("AIza")) { setKeyError("That doesn't look like a Gemini key (should start with AIza)."); return; }
     setKeyError(null);
     setValidating(true);
     try {
-      // Quick validation ping — small cheap request
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": trimmed,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 10,
-          messages: [{ role: "user", content: "ping" }],
-        }),
-      });
-      if (res.status === 401) { setKeyError("Invalid API key — Anthropic rejected it. Double-check your key."); setValidating(false); return; }
+      // Quick validation ping — cheap request against gemini-2.5-flash
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(trimmed)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: "ping" }] }],
+            generationConfig: { maxOutputTokens: 8 },
+          }),
+        }
+      );
+      if (res.status === 401 || res.status === 403) {
+        setKeyError("Invalid API key — Google rejected it. Double-check your key.");
+        setValidating(false);
+        return;
+      }
       onSetKey(trimmed);
     } catch {
       // Network error — accept key anyway, will fail later with a clear message
@@ -365,14 +395,14 @@ function ApiKeyPrompt({ user, onSetKey, onLogout }) {
 
         <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: "10px", padding: "28px" }}>
           <p style={{ fontSize: "13px", color: C.text, lineHeight: "1.8", marginBottom: "20px" }}>
-            Enter your <strong>Anthropic API key</strong>. It is saved only in your browser's localStorage and is sent exclusively to Anthropic's API — never to any other server.
+            Enter your <strong>Google Gemini API key</strong>. It is saved only in your browser's localStorage and is sent exclusively to Google's Generative Language API — never to any other server.
           </p>
 
           <input
             type="password"
             value={keyInput}
             onChange={e => { setKeyInput(e.target.value); setKeyError(null); }}
-            placeholder="sk-ant-api03-…"
+            placeholder="AIza…"
             autoFocus
             style={{
               width: "100%", padding: "12px", border: `1px solid ${keyError ? C.sell : C.border}`,
@@ -410,8 +440,8 @@ function ApiKeyPrompt({ user, onSetKey, onLogout }) {
           </button>
 
           <p style={{ fontSize: "10px", color: C.muted, marginTop: "16px", lineHeight: "1.7" }}>
-            Get your key at <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" style={{ color: C.accent }}>console.anthropic.com</a> → API Keys.<br />
-            Set a monthly spend limit in Settings to cap costs.
+            Get your key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{ color: C.accent }}>aistudio.google.com/apikey</a>.<br />
+            Set a budget alert in Google Cloud Billing to cap costs.
           </p>
         </div>
       </div>
@@ -941,7 +971,7 @@ function OutcomePanel({ status }) {
         <div style={{ fontSize: 9, color: goalColor, textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 700 }}>
           🎯 OUTCOME LOOP {status.goalMet ? "— GOAL MET ✓" : `— ITERATION ${status.iteration}/3`}
         </div>
-        <div style={{ fontSize: 8, color: C.muted }}>Haiku grader · Find ≥1 opportunity</div>
+        <div style={{ fontSize: 8, color: C.muted }}>Gemini Flash grader · Find ≥1 opportunity</div>
       </div>
       {status.criteria && Object.keys(status.criteria).length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 4, marginBottom: 8 }}>
@@ -981,17 +1011,23 @@ function ManageKeyModal({ onClose, onUpdate }) {
   const handleSave = async () => {
     const trimmed = keyInput.trim();
     if (!trimmed) { setErr("Please enter a key."); return; }
-    if (!trimmed.startsWith("sk-ant-")) { setErr("Doesn't look like an Anthropic key (should start with sk-ant-)."); return; }
+    if (!trimmed.startsWith("AIza")) { setErr("Doesn't look like a Gemini key (should start with AIza)."); return; }
     setErr(null); setValidating(true);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": trimmed, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 10, messages: [{ role: "user", content: "ping" }] }),
-      });
-      if (res.status === 401) { setErr("Invalid key — Anthropic rejected it."); setValidating(false); return; }
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(trimmed)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: "ping" }] }],
+            generationConfig: { maxOutputTokens: 8 },
+          }),
+        }
+      );
+      if (res.status === 401 || res.status === 403) { setErr("Invalid key — Google rejected it."); setValidating(false); return; }
     } catch { /* accept anyway */ }
-    localStorage.setItem("apex_api_key", trimmed);
+    localStorage.setItem("apex_gemini_key", trimmed);
     onUpdate(trimmed);
     setSaved(true);
     setValidating(false);
@@ -1007,7 +1043,7 @@ function ManageKeyModal({ onClose, onUpdate }) {
           type="password"
           value={keyInput}
           onChange={e => { setKeyInput(e.target.value); setErr(null); }}
-          placeholder="sk-ant-api03-…"
+          placeholder="AIza…"
           autoFocus
           style={{ width: "100%", padding: "10px", border: `1px solid ${err ? C.sell : C.border}`, background: C.surface, color: C.accent, borderRadius: 4, fontFamily: "monospace", fontSize: 12, outline: "none", marginBottom: 8, boxSizing: "border-box" }}
           onKeyDown={e => e.key === "Enter" && !validating && handleSave()}
@@ -1025,6 +1061,47 @@ function ManageKeyModal({ onClose, onUpdate }) {
   );
 }
 
+// ── CATEGORY ROW (watchlist editor) ───────────────────────────────────────────
+function CategoryRow({ category, selectedTickers, onToggleTicker, onRemoveTicker, onAddTicker, onRename, onDelete }) {
+  const [input, setInput] = useState("");
+  const handleAdd = () => {
+    if (!input.trim()) return;
+    if (onAddTicker(input)) setInput("");
+    else setInput("");
+  };
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <button onClick={onRename} title="Rename category" style={{ background: "transparent", border: "none", color: C.muted, fontSize: 9, textTransform: "uppercase", letterSpacing: "0.1em", cursor: "pointer", padding: 0, fontFamily: "Space Mono,monospace" }}>
+          {category.name} <span style={{ opacity: 0.5 }}>✎</span>
+        </button>
+        <button onClick={onDelete} title="Delete category" style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.muted, fontSize: 10, borderRadius: 3, cursor: "pointer", padding: "2px 8px", fontFamily: "Space Mono,monospace" }}>✕</button>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+        {category.tickers.map(t => {
+          const selected = selectedTickers.has(t);
+          return (
+            <span key={t} style={{ display: "inline-flex", alignItems: "center", border: `1px solid ${selected ? C.accent : C.border}`, background: selected ? "rgba(0,229,255,0.1)" : "transparent", borderRadius: 3, overflow: "hidden" }}>
+              <button onClick={() => onToggleTicker(t)} style={{ padding: "7px 10px", background: "transparent", border: "none", color: selected ? C.accent : C.muted, fontSize: 11, cursor: "pointer", fontFamily: "Space Mono,monospace" }}>{t}</button>
+              <button onClick={() => onRemoveTicker(t)} title="Remove from category" style={{ padding: "7px 8px", background: "transparent", border: "none", borderLeft: `1px solid ${selected ? C.accent : C.border}`, color: C.muted, fontSize: 10, cursor: "pointer" }}>✕</button>
+            </span>
+          );
+        })}
+        <span style={{ display: "inline-flex", alignItems: "center", border: `1px dashed ${C.border}`, borderRadius: 3 }}>
+          <input
+            value={input}
+            onChange={e => setInput(e.target.value.toUpperCase())}
+            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleAdd(); } }}
+            placeholder="+ TICKER"
+            style={{ width: 90, padding: "6px 8px", background: "transparent", border: "none", color: C.accent, fontSize: 11, fontFamily: "Space Mono,monospace", outline: "none" }}
+          />
+          <button onClick={handleAdd} disabled={!input.trim()} style={{ padding: "6px 10px", background: "transparent", border: "none", borderLeft: `1px dashed ${C.border}`, color: input.trim() ? C.accent : C.muted, fontSize: 11, cursor: input.trim() ? "pointer" : "not-allowed", fontFamily: "Space Mono,monospace" }}>Add</button>
+        </span>
+      </div>
+    </div>
+  );
+}
+
 // ── ROOT AUTH WRAPPER ─────────────────────────────────────────────────────────
 export default function App() {
   const [user, setUser] = useState(null);
@@ -1032,8 +1109,10 @@ export default function App() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
+    // Clean up legacy Anthropic key if present
+    if (localStorage.getItem("apex_api_key")) localStorage.removeItem("apex_api_key");
     const storedUser = localStorage.getItem("apex_user");
-    const storedKey = localStorage.getItem("apex_api_key");
+    const storedKey = localStorage.getItem("apex_gemini_key");
     if (storedUser) {
       try { setUser(JSON.parse(storedUser)); } catch { localStorage.removeItem("apex_user"); }
     }
@@ -1046,20 +1125,20 @@ export default function App() {
     localStorage.setItem("apex_user", JSON.stringify(userObj));
     setUser(userObj);
     if (userData.email === SPECIAL_USER_EMAIL && SPECIAL_USER_API_KEY) {
-      localStorage.setItem("apex_api_key", SPECIAL_USER_API_KEY);
+      localStorage.setItem("apex_gemini_key", SPECIAL_USER_API_KEY);
       setApiKey(SPECIAL_USER_API_KEY);
     }
   }, []);
 
   const handleSetApiKey = useCallback((key) => {
-    localStorage.setItem("apex_api_key", key);
+    localStorage.setItem("apex_gemini_key", key);
     setApiKey(key);
   }, []);
 
   const handleLogout = useCallback(async () => {
     try { await signOutFirebase(); } catch { /* ignore */ }
     localStorage.removeItem("apex_user");
-    localStorage.removeItem("apex_api_key");
+    localStorage.removeItem("apex_gemini_key");
     setUser(null);
     setApiKey(null);
   }, []);
@@ -1072,11 +1151,11 @@ export default function App() {
 
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
 function ApexEagleApp({ user, apiKey, onLogout, onUpdateKey }) {
-  const [selectedAI, setSelectedAI] = useState(new Set(["NVDA", "MSFT"]));
-  const [selectedEnergy, setSelectedEnergy] = useState(new Set());
+  const [categories, setCategories] = useState(() => loadJSON("apex_categories", DEFAULT_CATEGORIES));
+  const [selectedTickers, setSelectedTickers] = useState(() => new Set(loadJSON("apex_selected_tickers", DEFAULT_SELECTED)));
   const [leverage, setLeverage] = useState(2);
-  const [budget, setBudget] = useState(10000);
-  const [riskPct, setRiskPct] = useState(2);
+  const [budget, setBudget] = useState(() => loadJSON("apex_portfolio_value", 10000));
+  const [riskPct, setRiskPct] = useState(() => loadJSON("apex_risk_factor", 2));
   const [loading, setLoading] = useState(false);
   const [loaderStep, setLoaderStep] = useState("");
   const [signals, setSignals] = useState([]);
@@ -1088,9 +1167,61 @@ function ApexEagleApp({ user, apiKey, onLogout, onUpdateKey }) {
   const [outcomeStatus, setOutcomeStatus] = useState(null);
   const [showKeyModal, setShowKeyModal] = useState(false);
 
-  const toggleAsset = (setFn, id) => setFn(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const selectedAssets = [...selectedAI, ...selectedEnergy];
+  useEffect(() => { saveJSON("apex_categories", categories); }, [categories]);
+  useEffect(() => { saveJSON("apex_selected_tickers", [...selectedTickers]); }, [selectedTickers]);
+  useEffect(() => { saveJSON("apex_portfolio_value", budget); }, [budget]);
+  useEffect(() => { saveJSON("apex_risk_factor", riskPct); }, [riskPct]);
+
+  const toggleTicker = (ticker) => setSelectedTickers(prev => { const n = new Set(prev); n.has(ticker) ? n.delete(ticker) : n.add(ticker); return n; });
+  const allTickers = [...new Set(categories.flatMap(c => c.tickers))];
+  const selectedAssets = [...selectedTickers].filter(t => allTickers.includes(t));
   const sentColor = sentiment ? (sentiment.score >= 70 ? C.buy : sentiment.score <= 30 ? C.sell : C.hold) : C.muted;
+
+  const addCategory = () => {
+    const name = window.prompt("Category name (e.g. Crypto)");
+    if (!name) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setCategories(prev => [...prev, { id: randomId(), name: trimmed, tickers: [] }]);
+  };
+  const renameCategory = (id) => {
+    const cat = categories.find(c => c.id === id);
+    if (!cat) return;
+    const name = window.prompt("Rename category", cat.name);
+    if (!name) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setCategories(prev => prev.map(c => c.id === id ? { ...c, name: trimmed } : c));
+  };
+  const deleteCategory = (id) => {
+    const cat = categories.find(c => c.id === id);
+    if (!cat) return;
+    if (!window.confirm(`Delete category "${cat.name}"? Its tickers will no longer be available unless they exist in another category.`)) return;
+    setCategories(prev => prev.filter(c => c.id !== id));
+  };
+  const addTicker = (catId, raw) => {
+    const ticker = String(raw || "").trim().toUpperCase();
+    if (!ticker) return false;
+    let added = false;
+    setCategories(prev => prev.map(c => {
+      if (c.id !== catId) return c;
+      if (c.tickers.includes(ticker)) return c;
+      added = true;
+      return { ...c, tickers: [...c.tickers, ticker] };
+    }));
+    return added;
+  };
+  const removeTicker = (catId, ticker) => {
+    setCategories(prev => prev.map(c => c.id === catId ? { ...c, tickers: c.tickers.filter(t => t !== ticker) } : c));
+    // If the ticker no longer exists in any remaining category, deselect it.
+    setTimeout(() => {
+      setCategories(curr => {
+        const stillExists = curr.some(c => c.tickers.includes(ticker));
+        if (!stillExists) setSelectedTickers(prev => { const n = new Set(prev); n.delete(ticker); return n; });
+        return curr;
+      });
+    }, 0);
+  };
 
   const normalizeSignals = useCallback((sigs, lev) => sigs.map(s => {
     const cap = SL_CAPS[s.asset] ?? SL_CAPS.DEFAULT;
@@ -1153,8 +1284,8 @@ Return ONLY valid JSON, no markdown:
         lastResult = result;
         const normalized = normalizeSignals(result.signals, leverage);
 
-        setLoaderStep(`🔍 Haiku grader evaluating iteration ${iter}…`);
-        const graderPrompt = `You are the APEX Eagle Outcome Grader running on Haiku. You did NOT produce this output. Evaluate it independently.
+        setLoaderStep(`🔍 Grader evaluating iteration ${iter}…`);
+        const graderPrompt = `You are the APEX Eagle Outcome Grader running on Gemini 2.5 Flash. You did NOT produce this output. Evaluate it independently.
 
 ## RUBRIC
 ${OUTCOME_RUBRIC}
@@ -1166,7 +1297,7 @@ Return ONLY valid JSON:
 {"passed":<true if ALL 6 criteria pass>,"goalMet":<true if C1+C2 both pass>,"criteria":{"C1":{"pass":<bool>,"note":"<brief>"},"C2":{"pass":<bool>,"note":"<brief>"},"C3":{"pass":<bool>,"note":"<brief>"},"C4":{"pass":<bool>,"note":"<brief>"},"C5":{"pass":<bool>,"note":"<brief>"},"C6":{"pass":<bool>,"note":"<brief>"}},"feedback":"<if failed: precise instructions. If passed: All criteria met.>"}`;
 
         const graderData = await callApi(apiKey, {
-          model: "claude-haiku-4-5-20251001",
+          model: "gemini-2.5-flash",
           max_tokens: 800,
           messages: [{ role: "user", content: graderPrompt }],
         });
@@ -1292,7 +1423,7 @@ ohlcv: exactly 20 candles ending near current price. Never fabricate specific do
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", paddingTop: 60, gap: 16, textAlign: "center" }}>
                 <div className="eagle-anim" style={{ opacity: 0.4 }}><Eagle size={64} /></div>
                 <div style={{ fontFamily: "Syne,sans-serif", fontSize: 16, color: C.text }}>SELECT ASSETS & ANALYZE</div>
-                <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.8, maxWidth: 280 }}>Go to Settings, pick assets and risk params, then hit Analyze.<br />A Haiku grader verifies every result before showing it.</div>
+                <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.8, maxWidth: 280 }}>Go to Settings, pick assets and risk params, then hit Analyze.<br />A Gemini Flash grader verifies every result before showing it.</div>
                 <button onClick={() => setTab("settings")} style={{ padding: "10px 24px", background: C.accent, color: "#000", border: "none", fontFamily: "Syne,sans-serif", fontWeight: 700, fontSize: 12, borderRadius: 3, cursor: "pointer" }}>⚙ OPEN SETTINGS</button>
               </div>
             )}
@@ -1304,14 +1435,21 @@ ohlcv: exactly 20 candles ending near current price. Never fabricate specific do
 
         {tab === "settings" && (
           <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 90px" }}>
-            <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 10 }}>AI Stocks</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>
-              {AI_ASSETS.map(a => <button key={a.id} onClick={() => toggleAsset(setSelectedAI, a.id)} style={{ padding: "7px 13px", borderRadius: 3, fontSize: 11, cursor: "pointer", border: `1px solid ${selectedAI.has(a.id) ? C.accent : C.border}`, background: selectedAI.has(a.id) ? "rgba(0,229,255,0.1)" : "transparent", color: selectedAI.has(a.id) ? C.accent : C.muted, fontFamily: "Space Mono,monospace" }}>{a.label}</button>)}
-            </div>
-            <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 10 }}>Energy & Commodities</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>
-              {ENERGY_ASSETS.map(a => <button key={a.id} onClick={() => toggleAsset(setSelectedEnergy, a.id)} style={{ padding: "7px 13px", borderRadius: 3, fontSize: 11, cursor: "pointer", border: `1px solid ${selectedEnergy.has(a.id) ? C.accent : C.border}`, background: selectedEnergy.has(a.id) ? "rgba(0,229,255,0.1)" : "transparent", color: selectedEnergy.has(a.id) ? C.accent : C.muted, fontFamily: "Space Mono,monospace" }}>{a.label}</button>)}
-            </div>
+            {categories.map(cat => (
+              <CategoryRow
+                key={cat.id}
+                category={cat}
+                selectedTickers={selectedTickers}
+                onToggleTicker={toggleTicker}
+                onRemoveTicker={(t) => removeTicker(cat.id, t)}
+                onAddTicker={(t) => addTicker(cat.id, t)}
+                onRename={() => renameCategory(cat.id)}
+                onDelete={() => deleteCategory(cat.id)}
+              />
+            ))}
+            <button onClick={addCategory} style={{ padding: "8px 14px", background: "transparent", border: `1px dashed ${C.border}`, color: C.muted, borderRadius: 3, fontFamily: "Space Mono,monospace", fontSize: 11, cursor: "pointer", marginBottom: 20 }}>
+              + Add category
+            </button>
             <div style={{ height: 1, background: C.border, marginBottom: 20 }} />
             <div style={{ display: "grid", gap: 16, marginBottom: 20 }}>
               <div><div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>Portfolio Budget</div><input type="number" value={budget} min={100} step={500} onChange={e => setBudget(parseFloat(e.target.value) || 10000)} /></div>
@@ -1332,12 +1470,12 @@ ohlcv: exactly 20 candles ending near current price. Never fabricate specific do
 
             {user.email !== SPECIAL_USER_EMAIL && (
               <button onClick={() => setShowKeyModal(true)} style={{ width: "100%", padding: "10px", background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 4, fontFamily: "monospace", fontSize: 11, cursor: "pointer", marginBottom: 12 }}>
-                🔑 Update Anthropic API Key
+                🔑 Update Gemini API Key
               </button>
             )}
 
             <div style={{ background: "rgba(106,130,212,0.06)", border: "1px solid rgba(106,130,212,0.25)", borderRadius: 3, padding: "10px 12px", marginBottom: 12, fontSize: 10, color: "rgba(106,130,212,0.8)", lineHeight: 1.6 }}>
-              🎯 OUTCOMES LOOP — Sonnet generates signals · Haiku grader verifies (≥1 opportunity, conf ≥65%, tight SL, R:R ≥1.5) · Up to 3 iterations.
+              🎯 OUTCOMES LOOP — Gemini 2.5 Pro generates signals · Gemini 2.5 Flash grader verifies (≥1 opportunity, conf ≥65%, tight SL, R:R ≥1.5) · Up to 3 iterations.
             </div>
             <div style={{ background: "rgba(255,214,0,0.06)", border: "1px solid rgba(255,214,0,0.25)", borderRadius: 3, padding: "10px 12px", marginBottom: 16, fontSize: 10, color: "rgba(255,214,0,0.7)", lineHeight: 1.6 }}>
               ⚠ AI signals are informational only. Day trading carries substantial risk. Never invest more than you can afford to lose.

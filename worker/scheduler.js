@@ -4,11 +4,11 @@
  * Fires on cron: Monday + Wednesday 06:00 UTC (07:00 CET)
  * Assets:  AMD, NVDA, GOOGL
  * Mode:    Aggressive (3% risk per trade)
- * Logic:   Runs the APEX outcome loop (agent → Haiku grader, up to 3 iterations)
+ * Logic:   Runs the APEX outcome loop (Gemini 2.5 Pro agent → Gemini 2.5 Flash grader, up to 3 iterations)
  *          If any BUY signal with confidence ≥ 65 found → send HTML email via Resend
  *
  * Required Worker Secrets (set in Cloudflare dashboard):
- *   ANTHROPIC_API_KEY   — your Anthropic API key
+ *   GEMINI_API_KEY      — your Google Gemini API key (AIza…)
  *   RESEND_API_KEY      — your Resend API key
  *
  * Optional env vars (set in Cloudflare dashboard → Variables):
@@ -97,35 +97,48 @@ function normalizeSignals(signals, leverage) {
   });
 }
 
-// ── ANTHROPIC API ─────────────────────────────────────────────────────────────
-async function callClaude(env, body, retries = 3) {
-  const { model = "claude-sonnet-4-20250514", ...rest } = body;
+// ── GEMINI API ────────────────────────────────────────────────────────────────
+async function callGemini(env, body, retries = 3) {
+  const { model = "gemini-2.5-pro", max_tokens, tools, messages = [] } = body;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  const contents = messages.map(m => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: typeof m.content === "string" ? m.content : (m.content?.[0]?.text || "") }],
+  }));
+  const geminiBody = {
+    contents,
+    generationConfig: {
+      ...(max_tokens ? { maxOutputTokens: max_tokens } : {}),
+      temperature: 0.7,
+    },
+  };
+  if (Array.isArray(tools) && tools.some(t => t?.type?.startsWith("web_search") || t?.name === "web_search")) {
+    geminiBody.tools = [{ google_search: {} }];
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": env.ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({ model, ...rest }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(geminiBody),
       });
 
-      if ([500, 503, 529].includes(res.status)) {
+      if ([500, 502, 503, 504].includes(res.status)) {
         if (attempt < retries) { await sleep(2000 * Math.pow(2, attempt)); continue; }
-        throw new Error(`Anthropic server error ${res.status}`);
+        throw new Error(`Gemini server error ${res.status}`);
       }
       if (res.status === 429) {
         if (attempt < retries) { await sleep(4000 * Math.pow(2, attempt)); continue; }
-        throw new Error("Anthropic rate limit exceeded");
+        throw new Error("Gemini rate limit exceeded");
       }
 
       const data = await res.json();
-      if (data.error) throw new Error(data.error.message || "Anthropic API error");
-      return data.content.filter(b => b.type === "text").map(b => b.text).join("");
+      if (data.error) throw new Error(data.error.message || "Gemini API error");
+      return (data.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("");
     } catch (err) {
       if (attempt < retries) { await sleep(1000 * Math.pow(2, attempt)); continue; }
       throw err;
@@ -147,7 +160,7 @@ async function generateSignals(env, budget, leverage) {
   for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     console.log(`[APEX] Outcome loop iteration ${iteration}/${MAX_ITERATIONS}`);
 
-    // ── AGENT (Sonnet + web search) ──
+    // ── AGENT (Gemini 2.5 Pro + Google Search grounding) ──
     const agentPrompt = `You are APEX Eagle, elite intraday day trading analyst. Today is ${dateStr} at ${timeStr}.
 Assets: ${ASSETS.join(", ")}
 Portfolio: ${fmt(budget)} | Risk: ${RISK_PCT}% per trade (AGGRESSIVE) | Max leverage: ${leverage}×
@@ -164,7 +177,7 @@ STOP LOSS RULES:
 Return ONLY valid JSON, no markdown:
 {"overallSentiment":<0-100>,"overallLabel":"<EXTREME FEAR|FEAR|NEUTRAL|GREED|EXTREME GREED>","signals":[{"asset":"<ticker>","assetFull":"<name>","currentPrice":<n>,"action":"<BUY|SELL|HOLD>","confidence":<0-100>,"suggestedLeverage":<1-${leverage}>,"entryNote":"<specific entry e.g. breakout above $X>","stopLossPct":<n>,"stopLossNote":"<exact price + reason>","takeProfitPct":<n>,"takeProfitNote":"<target>","bullish":<0-100>,"keyLevel":"<price>","rsi":<0-100>,"trend":"<UPTREND|DOWNTREND|SIDEWAYS>","patterns":"<pattern>","volume":"<ABOVE_AVG|BELOW_AVG|AVERAGE>","reasoning":"<2-3 sentences>"}]}`;
 
-    const agentText = await callClaude(env, {
+    const agentText = await callGemini(env, {
       max_tokens: 3000,
       tools: [{ type: "web_search_20250305", name: "web_search" }],
       messages: [{ role: "user", content: agentPrompt }],
@@ -179,9 +192,9 @@ Return ONLY valid JSON, no markdown:
     lastResult = result;
     const normalized = normalizeSignals(result.signals, leverage);
 
-    // ── GRADER (Haiku — separate context) ──
-    console.log(`[APEX] Haiku grader evaluating iteration ${iteration}...`);
-    const graderPrompt = `You are the APEX Eagle Outcome Grader running on Haiku. You did NOT produce this output — evaluate it independently.
+    // ── GRADER (Gemini 2.5 Flash — separate context) ──
+    console.log(`[APEX] Gemini Flash grader evaluating iteration ${iteration}...`);
+    const graderPrompt = `You are the APEX Eagle Outcome Grader running on Gemini 2.5 Flash. You did NOT produce this output — evaluate it independently.
 
 ## RUBRIC
 ${OUTCOME_RUBRIC}
@@ -196,8 +209,8 @@ ${JSON.stringify(normalized.map(s => ({
 Return ONLY valid JSON:
 {"passed":<true if ALL criteria pass>,"goalMet":<true if C1+C2 both pass>,"criteria":{"C1":{"pass":<bool>,"note":"<brief>"},"C2":{"pass":<bool>,"note":"<brief>"},"C3":{"pass":<bool>,"note":"<brief>"},"C4":{"pass":<bool>,"note":"<brief>"},"C5":{"pass":<bool>,"note":"<brief>"},"C6":{"pass":<bool>,"note":"<brief>"}},"feedback":"<if failed: what agent must fix. If passed: All criteria met.>"}`;
 
-    const graderText = await callClaude(env, {
-      model: "claude-haiku-4-5-20251001",
+    const graderText = await callGemini(env, {
+      model: "gemini-2.5-flash",
       max_tokens: 600,
       messages: [{ role: "user", content: graderPrompt }],
     });
@@ -453,12 +466,12 @@ export default {
   },
 
   // HTTP handler for manual test trigger
-  // GET /trigger?secret=<ANTHROPIC_API_KEY> to manually fire
+  // GET /trigger?secret=<GEMINI_API_KEY> to manually fire
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === "/trigger") {
       const secret = url.searchParams.get("secret");
-      if (secret !== env.ANTHROPIC_API_KEY) {
+      if (secret !== env.GEMINI_API_KEY) {
         return new Response("Unauthorized", { status: 401 });
       }
       ctx.waitUntil(run(env));
