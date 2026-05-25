@@ -124,7 +124,7 @@ The Analysis Summary panel underneath shows the count of selected assets, your c
 1. Make sure at least one ticker is selected (cyan pill).
 2. Tap **▶ ANALYZE NOW** in the Settings tab — or the **▶ ANALYZE** button in the bottom nav from any tab.
 3. A progress bar appears at the top of the screen. The outcome loop runs up to 3 iterations:
-   - **Gemini 3 Flash** generates signals using Google Search grounding for live prices, dark-pool prints, options flow, institutional bias, and recent news.
+   - **Gemini 3.5 Flash** generates signals using Google Search grounding for live prices, dark-pool prints, options flow, institutional bias, and recent news.
    - **Gemini 2.5 Flash** grader scores the result against the 6-criterion rubric (opportunity found, confidence ≥65%, tight stop-loss, R:R ≥1.5, specific entry, valid current price).
    - If the grader passes (or just the "goal met" criteria), iteration stops early.
 4. Results land on the **Signals** tab: one card per ticker with action (BUY/SELL/HOLD), confidence, suggested leverage, SL/TP percentages and price levels, RSI, SMA20/50, candlestick chart, position sizing, and reasoning.
@@ -186,7 +186,7 @@ GitHub repo
            ├── Cron: Mon 06:00 UTC
            ├── Cron: Wed 06:00 UTC
            ▼
-       Gemini 3 Flash (Google Search grounding)
+       Gemini 3.5 Flash (Google Search grounding)
        + Gemini 2.5 Flash grader (outcome loop)
            ▼ BUY signal found (conf ≥ 65%)
        Resend API ── HTML email ── recipient

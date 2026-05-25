@@ -201,7 +201,7 @@ function attachDiag(err, diag) {
 
 async function callApi(apiKey, body, retries = 3, callLabel = "api") {
   const {
-    model = "gemini-3-flash-preview",
+    model = "gemini-3.5-flash",
     max_tokens,
     tools,
     messages = [],
@@ -1835,7 +1835,7 @@ ohlcv: exactly 20 candles ending near current price. Never fabricate specific do
             )}
 
             <div style={{ background: "rgba(125,146,220,0.08)", border: "1px solid rgba(125,146,220,0.22)", borderRadius: 8, padding: "12px 14px", marginBottom: 12, fontSize: 13, color: C.inst, lineHeight: 1.6 }}>
-              🎯 <strong style={{ fontWeight: 600 }}>Outcome loop</strong> — Gemini 3 Flash generates signals, Gemini 2.5 Flash grader verifies (≥1 opportunity, conf ≥65%, tight SL, R:R ≥1.5). Up to 3 iterations.
+              🎯 <strong style={{ fontWeight: 600 }}>Outcome loop</strong> — Gemini 3.5 Flash generates signals, Gemini 2.5 Flash grader verifies (≥1 opportunity, conf ≥65%, tight SL, R:R ≥1.5). Up to 3 iterations.
             </div>
             <div style={{ background: "rgba(240,193,75,0.07)", border: "1px solid rgba(240,193,75,0.22)", borderRadius: 8, padding: "12px 14px", marginBottom: 20, fontSize: 13, color: C.hold, lineHeight: 1.6 }}>
               ⚠ AI signals are informational only. Day trading carries substantial risk. Never invest more than you can afford to lose.
