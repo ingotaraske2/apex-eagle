@@ -99,7 +99,7 @@ function normalizeSignals(signals, leverage) {
 
 // ── GEMINI API ────────────────────────────────────────────────────────────────
 async function callGemini(env, body, retries = 3) {
-  const { model = "gemini-2.5-flash-lite", max_tokens, tools, messages = [] } = body;
+  const { model = "gemini-3.0-flash", max_tokens, tools, messages = [] } = body;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   const contents = messages.map(m => ({
