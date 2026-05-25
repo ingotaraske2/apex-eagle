@@ -194,7 +194,12 @@ async function signOutFirebase() {
 // call-site stability, translates to Gemini's generateContent shape, and returns
 // a response whose .content[].text mirrors Anthropic so call sites can keep
 // data.content.filter(b => b.type === "text").map(b => b.text).join("").
-async function callApi(apiKey, body, retries = 3) {
+function attachDiag(err, diag) {
+  err.diag = { ...(err.diag || {}), ...diag };
+  return err;
+}
+
+async function callApi(apiKey, body, retries = 3, callLabel = "api") {
   const {
     model = "gemini-3-flash-preview",
     max_tokens,
@@ -213,16 +218,26 @@ async function callApi(apiKey, body, retries = 3) {
       temperature: 0.7,
     },
   };
-  // Anthropic-style web_search tool → Gemini google_search grounding
-  if (Array.isArray(tools) && tools.some(t => t?.type?.startsWith("web_search") || t?.name === "web_search")) {
-    geminiBody.tools = [{ google_search: {} }];
-  }
+  const hasSearchTool = Array.isArray(tools) && tools.some(t => t?.type?.startsWith("web_search") || t?.name === "web_search");
+  if (hasSearchTool) geminiBody.tools = [{ google_search: {} }];
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const urlRedacted = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=AIza…`;
 
   // Cap 429 retries to 1 (free tier is tight; aggressive retry just burns the next quota window).
   const MAX_429_ATTEMPTS = 1;
   let attempt429 = 0;
+  const startedAt = Date.now();
+
+  const baseDiag = () => ({
+    callLabel,
+    model,
+    url: urlRedacted,
+    grounding: hasSearchTool,
+    maxOutputTokens: max_tokens || null,
+    promptChars: (contents[0]?.parts?.[0]?.text || "").length,
+    elapsedMs: Date.now() - startedAt,
+  });
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -231,57 +246,94 @@ async function callApi(apiKey, body, retries = 3) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(geminiBody),
       });
+      const responseHeaders = {};
+      try { res.headers.forEach((v, k) => { responseHeaders[k] = v; }); } catch { /* ignore */ }
+
       if ([500, 502, 503, 504].includes(res.status)) {
         if (attempt < retries) { await sleep(1500 * Math.pow(2, attempt)); continue; }
-        throw new Error(`Server error (${res.status}). Try again.`);
+        const bodyText = await res.clone().text().catch(() => "");
+        throw attachDiag(new Error(`Server error (${res.status}). Try again.`), {
+          ...baseDiag(), status: res.status, attempt, attempts429: attempt429,
+          responseHeaders, responseBody: bodyText.slice(0, 4000),
+        });
       }
       if (res.status === 429) {
-        if (attempt429 >= MAX_429_ATTEMPTS) {
-          // Try to read structured retry hint from Gemini's error payload.
-          let retryHintSec = null;
-          let isDailyQuota = false;
-          try {
-            const errBody = await res.clone().json();
-            const details = errBody?.error?.details || [];
-            for (const d of details) {
-              if (d?.["@type"]?.includes("RetryInfo") && typeof d.retryDelay === "string") {
-                const m = d.retryDelay.match(/(\d+)s/);
-                if (m) retryHintSec = Number(m[1]);
-              }
-              if (d?.["@type"]?.includes("QuotaFailure")) {
-                const v = JSON.stringify(d.violations || []);
-                if (/PerDay|day/i.test(v)) isDailyQuota = true;
-              }
-            }
-          } catch { /* ignore parse errors */ }
-          if (isDailyQuota) {
-            throw new Error("Daily Gemini quota exhausted. Try again tomorrow, switch keys, or upgrade to a paid tier.");
+        // Always capture the raw body+headers for diagnosis.
+        const rawText = await res.clone().text().catch(() => "");
+        let errBody = null;
+        try { errBody = JSON.parse(rawText); } catch { /* not JSON */ }
+        let retryHintSec = null;
+        let quotaViolations = [];
+        let isDailyQuota = false;
+        const details = errBody?.error?.details || [];
+        for (const d of details) {
+          if (d?.["@type"]?.includes("RetryInfo") && typeof d.retryDelay === "string") {
+            const m = d.retryDelay.match(/(\d+(?:\.\d+)?)s/);
+            if (m) retryHintSec = Number(m[1]);
           }
-          throw new Error(retryHintSec
-            ? `Rate limited. The API suggests waiting ~${retryHintSec}s before retrying.`
-            : "Rate limited. Wait a minute before retrying.");
+          if (d?.["@type"]?.includes("QuotaFailure")) {
+            quotaViolations = d.violations || [];
+            const v = JSON.stringify(quotaViolations);
+            if (/PerDay|day/i.test(v)) isDailyQuota = true;
+          }
         }
-        // Honor Retry-After header if provided, else default 8s.
+
+        if (attempt429 >= MAX_429_ATTEMPTS) {
+          const message = isDailyQuota
+            ? "Daily Gemini quota exhausted. Try again tomorrow, switch keys, or upgrade to a paid tier."
+            : (retryHintSec
+                ? `Rate limited. The API suggests waiting ~${retryHintSec}s before retrying.`
+                : "Rate limited. Wait a minute before retrying.");
+          throw attachDiag(new Error(message), {
+            ...baseDiag(),
+            status: 429, attempt, attempts429: attempt429 + 1,
+            isDailyQuota,
+            retryHintSec,
+            retryAfterHeader: res.headers.get("Retry-After"),
+            quotaViolations,
+            apiErrorMessage: errBody?.error?.message || null,
+            apiErrorStatus: errBody?.error?.status || null,
+            responseHeaders,
+            responseBody: rawText.slice(0, 4000),
+          });
+        }
+        // First 429: honor Retry-After or RetryInfo, fall back to 8s.
         const retryAfter = Number(res.headers.get("Retry-After"));
-        const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 8000;
+        const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+          ? retryAfter * 1000
+          : (retryHintSec ? Math.min(retryHintSec, 30) * 1000 : 8000);
         attempt429++;
         await sleep(waitMs);
         continue;
       }
       if (res.status === 401 || res.status === 403) {
-        throw new Error("Invalid API key. Check your Gemini key in Settings.");
+        const bodyText = await res.clone().text().catch(() => "");
+        throw attachDiag(new Error("Invalid API key. Check your Gemini key in Settings."), {
+          ...baseDiag(), status: res.status, attempt, attempts429: attempt429,
+          responseHeaders, responseBody: bodyText.slice(0, 4000),
+        });
       }
       const data = await res.json();
-      if (data.error) throw new Error(data.error.message || "API error");
+      if (data.error) {
+        throw attachDiag(new Error(data.error.message || "API error"), {
+          ...baseDiag(), status: res.status, attempt, attempts429: attempt429,
+          responseHeaders, apiErrorStatus: data.error.status || null,
+          responseBody: JSON.stringify(data).slice(0, 4000),
+        });
+      }
       const text = (data.candidates?.[0]?.content?.parts || [])
         .map(p => p.text || "")
         .join("");
       return { content: [{ type: "text", text }], _raw: data };
     } catch (err) {
-      if (attempt < retries && !err.message.includes("Rate limited") && !err.message.includes("Invalid API key")) {
+      const isRetryable = !err.message.includes("Rate limited")
+        && !err.message.includes("Daily Gemini quota")
+        && !err.message.includes("Invalid API key");
+      if (attempt < retries && isRetryable) {
         await sleep(1000 * Math.pow(2, attempt));
         continue;
       }
+      if (!err.diag) attachDiag(err, { ...baseDiag(), attempt, attempts429: attempt429, networkError: true });
       throw err;
     }
   }
@@ -1102,6 +1154,151 @@ function OutcomePanel({ status }) {
   );
 }
 
+// ── ERROR BANNER (with expandable technical details) ─────────────────────────
+function ErrorBanner({ error, onDismiss }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  if (!error) return null;
+
+  const message = typeof error === "string" ? error : error.message;
+  const diag = typeof error === "string" ? null : error.diag;
+  const stack = typeof error === "string" ? null : error.stack;
+
+  const isRateLimit = /rate limited|quota/i.test(message);
+  const isDailyQuota = /daily.*quota/i.test(message);
+
+  // Build a single copyable diagnostic blob.
+  const debugBlob = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    userAgent: typeof navigator !== "undefined" ? navigator.userAgent : null,
+    message,
+    diag,
+    stack: stack ? stack.split("\n").slice(0, 8).join("\n") : null,
+  }, null, 2);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(debugBlob);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* clipboard not available */ }
+  };
+
+  // Highlight the most useful 429 fields up top.
+  const quickFacts = diag ? [
+    { k: "Call", v: diag.callLabel },
+    { k: "Model", v: diag.model },
+    { k: "HTTP", v: diag.status ?? "—" },
+    { k: "API status", v: diag.apiErrorStatus },
+    { k: "Retry-After", v: diag.retryAfterHeader },
+    { k: "Suggested wait", v: diag.retryHintSec != null ? `${diag.retryHintSec}s` : null },
+    { k: "Daily quota?", v: diag.isDailyQuota ? "yes" : null },
+    { k: "Grounding", v: typeof diag.grounding === "boolean" ? String(diag.grounding) : null },
+    { k: "Attempts", v: diag.attempts429 != null ? `${diag.attempts429} (429)` : null },
+    { k: "Elapsed", v: diag.elapsedMs != null ? `${diag.elapsedMs}ms` : null },
+    { k: "Prompt chars", v: diag.promptChars },
+  ].filter(({ v }) => v != null && v !== "") : [];
+
+  return (
+    <div style={{ background: "rgba(255,92,124,0.08)", border: `1px solid rgba(255,92,124,0.3)`, borderRadius: 10, padding: "14px 16px", marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ fontSize: 14, color: C.sell, lineHeight: 1.55, flex: 1 }}>
+          <span style={{ fontWeight: 600 }}>⚠ {message}</span>
+        </div>
+        {onDismiss && (
+          <button onClick={onDismiss} title="Dismiss" style={{ background: "transparent", border: "none", color: C.muted, fontSize: 16, cursor: "pointer", lineHeight: 1, padding: 0 }}>×</button>
+        )}
+      </div>
+
+      {isRateLimit && diag?.quotaViolations?.length > 0 && (
+        <div style={{ marginTop: 10, fontSize: 12, color: C.textDim, lineHeight: 1.6 }}>
+          {diag.quotaViolations.map((v, i) => (
+            <div key={i}>
+              <span style={{ color: C.muted }}>Quota: </span>
+              <span className="mono">{v.quotaId || v.quotaMetric || "(unknown)"}</span>
+              {v.quotaValue ? <span> · limit <span className="mono">{v.quotaValue}</span></span> : null}
+              {v.quotaDimensions ? <span style={{ color: C.muted }}> · {Object.entries(v.quotaDimensions).map(([k, vv]) => `${k}=${vv}`).join(", ")}</span> : null}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {isDailyQuota && (
+        <div style={{ marginTop: 10, fontSize: 12, color: C.textDim, lineHeight: 1.6, background: "rgba(240,193,75,0.07)", border: "1px solid rgba(240,193,75,0.2)", borderRadius: 6, padding: "8px 10px" }}>
+          💡 Daily quota resets at 00:00 Pacific Time (per Google's quota window). Switching to a paid tier raises this immediately.
+        </div>
+      )}
+
+      {(diag || stack) && (
+        <div style={{ marginTop: 12 }}>
+          <button
+            onClick={() => setOpen(o => !o)}
+            style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.textDim, fontSize: 12, fontWeight: 500, borderRadius: 6, padding: "6px 10px", cursor: "pointer" }}
+          >
+            {open ? "▲ Hide technical details" : "▼ Show technical details"}
+          </button>
+          <button
+            onClick={copy}
+            style={{ marginLeft: 8, background: "transparent", border: `1px solid ${C.border}`, color: C.textDim, fontSize: 12, fontWeight: 500, borderRadius: 6, padding: "6px 10px", cursor: "pointer" }}
+          >
+            {copied ? "✓ Copied" : "Copy debug info"}
+          </button>
+
+          {open && (
+            <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+              {quickFacts.length > 0 && (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 6 }}>
+                  {quickFacts.map(({ k, v }) => (
+                    <div key={k} style={{ background: C.surface, border: `1px solid ${C.borderSoft}`, borderRadius: 6, padding: "6px 10px" }}>
+                      <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 2 }}>{k}</div>
+                      <div className="mono" style={{ fontSize: 12, color: C.text, wordBreak: "break-all" }}>{String(v)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {diag?.apiErrorMessage && (
+                <div>
+                  <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 4 }}>API error message</div>
+                  <div style={{ fontSize: 12, color: C.text, lineHeight: 1.55, fontFamily: FONT_MONO, background: C.surface, border: `1px solid ${C.borderSoft}`, borderRadius: 6, padding: "8px 10px", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{diag.apiErrorMessage}</div>
+                </div>
+              )}
+
+              {diag?.url && (
+                <div>
+                  <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 4 }}>Request URL</div>
+                  <div className="mono" style={{ fontSize: 11, color: C.textDim, background: C.surface, border: `1px solid ${C.borderSoft}`, borderRadius: 6, padding: "6px 10px", wordBreak: "break-all" }}>{diag.url}</div>
+                </div>
+              )}
+
+              {diag?.responseHeaders && Object.keys(diag.responseHeaders).length > 0 && (
+                <div>
+                  <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 4 }}>Response headers</div>
+                  <pre className="mono" style={{ fontSize: 11, color: C.textDim, background: C.surface, border: `1px solid ${C.borderSoft}`, borderRadius: 6, padding: "8px 10px", whiteSpace: "pre-wrap", wordBreak: "break-all", maxHeight: 180, overflow: "auto", margin: 0 }}>{Object.entries(diag.responseHeaders).map(([k, v]) => `${k}: ${v}`).join("\n")}</pre>
+                </div>
+              )}
+
+              {diag?.responseBody && (
+                <div>
+                  <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 4 }}>Response body (first 4 KB)</div>
+                  <pre className="mono" style={{ fontSize: 11, color: C.textDim, background: C.surface, border: `1px solid ${C.borderSoft}`, borderRadius: 6, padding: "8px 10px", whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 240, overflow: "auto", margin: 0 }}>{diag.responseBody}</pre>
+                </div>
+              )}
+
+              {stack && (
+                <details>
+                  <summary style={{ fontSize: 11, color: C.muted, cursor: "pointer", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em" }}>Stack trace</summary>
+                  <pre className="mono" style={{ fontSize: 11, color: C.textDim, background: C.surface, border: `1px solid ${C.borderSoft}`, borderRadius: 6, padding: "8px 10px", whiteSpace: "pre-wrap", marginTop: 6, maxHeight: 200, overflow: "auto" }}>{stack}</pre>
+                </details>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── MANAGE KEY MODAL ──────────────────────────────────────────────────────────
 function ManageKeyModal({ onClose, onUpdate }) {
   const [keyInput, setKeyInput] = useState("");
@@ -1411,7 +1608,7 @@ Return ONLY valid JSON, no markdown:
           max_tokens: 4000,
           tools: [{ type: "web_search_20250305", name: "web_search" }],
           messages: [{ role: "user", content: agentPrompt }],
-        });
+        }, 3, `agent-iter-${iter}`);
         const agentText = agentData.content.filter(b => b.type === "text").map(b => b.text).join("");
         const result = safeParseJson(agentText);
         if (!result?.signals?.length) {
@@ -1438,7 +1635,7 @@ Return ONLY valid JSON:
           model: "gemini-2.5-flash",
           max_tokens: 800,
           messages: [{ role: "user", content: graderPrompt }],
-        });
+        }, 3, `grader-iter-${iter}`);
         const graderResult = safeParseJson(graderData.content.filter(b => b.type === "text").map(b => b.text).join(""));
         const entry = {
           iteration: iter,
@@ -1484,7 +1681,7 @@ Return ONLY valid JSON:
 {"assets":{"<TICKER>":{"sentimentSummary":{"headline":"<1 sentence>","bullPoints":["<b1>","<b2>","<b3>"],"bearPoints":["<r1>","<r2>","<r3>"],"catalysts":["<c1>","<c2>"],"analystConsensus":"<short>","newsFlow":"<POSITIVE|NEGATIVE|MIXED|NEUTRAL|NO_RECENT_DATA>","socialSentiment":"<VERY_BULLISH|BULLISH|NEUTRAL|BEARISH|VERY_BEARISH>"},"institutionalFlow":{"overallBias":"<ACCUMULATING|DISTRIBUTING|NEUTRAL>","darkPool":{"signal":"<BULLISH|BEARISH|NEUTRAL|NO_DATA>","detail":"<detail>","recentPrints":["<p1>","<p2>"]},"optionsFlow":{"putCallRatio":"<n or N/A>","signal":"<BULLISH|BEARISH|NEUTRAL>","unusualActivity":"<detail>"},"insiderActivity":{"signal":"<BUYING|SELLING|NEUTRAL|NO_RECENT>","detail":"<detail>"},"etfFlow":{"signal":"<INFLOW|OUTFLOW|NEUTRAL>","detail":"<detail>"},"institutionalOwnership":"<detail>","13fChange":"<detail>","flowScore":<0-100>},"ohlcv":[{"o":<n>,"h":<n>,"l":<n>,"c":<n>,"v":<0-100>}]}}}
 ohlcv: exactly 20 candles ending near current price. Never fabricate specific dollar amounts.`;
           const enriched = safeParseJson(
-            (await callApi(apiKey, { max_tokens: 6000, tools: [{ type: "web_search_20250305", name: "web_search" }], messages: [{ role: "user", content: enrichPrompt }] }))
+            (await callApi(apiKey, { max_tokens: 6000, tools: [{ type: "web_search_20250305", name: "web_search" }], messages: [{ role: "user", content: enrichPrompt }] }, 3, "enrichment"))
               .content.filter(b => b.type === "text").map(b => b.text).join("")
           );
           setSignals(prev => prev.map(s => {
@@ -1516,7 +1713,10 @@ ohlcv: exactly 20 candles ending near current price. Never fabricate specific do
         return prev;
       });
     } catch (err) {
-      setError(err.message);
+      // Capture full diagnostic context (status, model, response body, headers, etc.)
+      // alongside the human-readable message so the UI can surface a "Technical
+      // details" panel for debugging rate limits and other API issues.
+      setError({ message: err.message, diag: err.diag || null, stack: err.stack || null });
     }
     setLoading(false);
   };
@@ -1560,9 +1760,7 @@ ohlcv: exactly 20 candles ending near current price. Never fabricate specific do
       <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
         {tab === "signals" && (
           <div style={{ flex: 1, overflowY: "auto", padding: "20px 16px 110px", maxWidth: 720, margin: "0 auto", width: "100%" }}>
-            {error && (
-              <div style={{ background: "rgba(255,92,124,0.08)", border: `1px solid rgba(255,92,124,0.3)`, borderRadius: 8, padding: "12px 14px", fontSize: 13, color: C.sell, marginBottom: 14, lineHeight: 1.55 }}>⚠ {error}</div>
-            )}
+            <ErrorBanner error={error} onDismiss={() => setError(null)} />
             <OutcomePanel status={outcomeStatus} />
             {!signals.length && !loading && !error && !outcomeStatus && (
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", paddingTop: 72, gap: 20, textAlign: "center" }}>
