@@ -189,10 +189,9 @@ async function signOutFirebase() {
   await signOut(auth);
 }
 
-// ── API (Gemini, with retry + per-call apiKey injection) ──────────────────────
-// Accepts an Anthropic-shaped body { model, max_tokens, tools, messages } for
-// call-site stability, translates to Gemini's generateContent shape, and returns
-// a response whose .content[].text mirrors Anthropic so call sites can keep
+// ── API (Anthropic Messages, with retry + per-call apiKey injection) ──────────
+// Body shape accepted: { model, max_tokens, tools, messages } — same as Anthropic's
+// /v1/messages endpoint. Response is returned untouched so call sites can keep
 // data.content.filter(b => b.type === "text").map(b => b.text).join("").
 function attachDiag(err, diag) {
   err.diag = { ...(err.diag || {}), ...diag };
@@ -201,30 +200,24 @@ function attachDiag(err, diag) {
 
 async function callApi(apiKey, body, retries = 3, callLabel = "api") {
   const {
-    model = "gemini-3.5-flash",
-    max_tokens,
+    model = "claude-sonnet-4-5-20250929",
+    max_tokens = 4000,
     tools,
     messages = [],
   } = body;
 
-  const contents = messages.map(m => ({
-    role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: typeof m.content === "string" ? m.content : (m.content?.[0]?.text || "") }],
-  }));
-  const geminiBody = {
-    contents,
-    generationConfig: {
-      ...(max_tokens ? { maxOutputTokens: max_tokens } : {}),
-      temperature: 0.7,
-    },
+  const requestBody = {
+    model,
+    max_tokens,
+    messages,
+    ...(Array.isArray(tools) && tools.length ? { tools } : {}),
   };
+
   const hasSearchTool = Array.isArray(tools) && tools.some(t => t?.type?.startsWith("web_search") || t?.name === "web_search");
-  if (hasSearchTool) geminiBody.tools = [{ google_search: {} }];
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const urlRedacted = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=AIza…`;
+  const url = "https://api.anthropic.com/v1/messages";
 
-  // Cap 429 retries to 1 (free tier is tight; aggressive retry just burns the next quota window).
+  // Cap 429 retries to 1 — aggressive retry burns the next quota window.
   const MAX_429_ATTEMPTS = 1;
   let attempt429 = 0;
   const startedAt = Date.now();
@@ -232,10 +225,10 @@ async function callApi(apiKey, body, retries = 3, callLabel = "api") {
   const baseDiag = () => ({
     callLabel,
     model,
-    url: urlRedacted,
+    url,
     grounding: hasSearchTool,
-    maxOutputTokens: max_tokens || null,
-    promptChars: (contents[0]?.parts?.[0]?.text || "").length,
+    maxTokens: max_tokens,
+    promptChars: (typeof messages[0]?.content === "string" ? messages[0].content : (messages[0]?.content?.[0]?.text || "")).length,
     elapsedMs: Date.now() - startedAt,
   });
 
@@ -243,92 +236,96 @@ async function callApi(apiKey, body, retries = 3, callLabel = "api") {
     try {
       const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(geminiBody),
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify(requestBody),
       });
       const responseHeaders = {};
       try { res.headers.forEach((v, k) => { responseHeaders[k] = v; }); } catch { /* ignore */ }
 
-      if ([500, 502, 503, 504].includes(res.status)) {
+      if ([500, 502, 503, 504, 529].includes(res.status)) {
         if (attempt < retries) { await sleep(1500 * Math.pow(2, attempt)); continue; }
         const bodyText = await res.clone().text().catch(() => "");
-        throw attachDiag(new Error(`Server error (${res.status}). Try again.`), {
+        throw attachDiag(new Error(`Anthropic server error (${res.status}). Try again.`), {
           ...baseDiag(), status: res.status, attempt, attempts429: attempt429,
           responseHeaders, responseBody: bodyText.slice(0, 4000),
         });
       }
       if (res.status === 429) {
-        // Always capture the raw body+headers for diagnosis.
+        // Capture body + headers for diagnosis. Anthropic returns a JSON error
+        // with type "rate_limit_error" and may include a `retry-after` header.
         const rawText = await res.clone().text().catch(() => "");
         let errBody = null;
         try { errBody = JSON.parse(rawText); } catch { /* not JSON */ }
-        let retryHintSec = null;
-        let quotaViolations = [];
-        let isDailyQuota = false;
-        const details = errBody?.error?.details || [];
-        for (const d of details) {
-          if (d?.["@type"]?.includes("RetryInfo") && typeof d.retryDelay === "string") {
-            const m = d.retryDelay.match(/(\d+(?:\.\d+)?)s/);
-            if (m) retryHintSec = Number(m[1]);
-          }
-          if (d?.["@type"]?.includes("QuotaFailure")) {
-            quotaViolations = d.violations || [];
-            const v = JSON.stringify(quotaViolations);
-            if (/PerDay|day/i.test(v)) isDailyQuota = true;
-          }
-        }
+        const retryAfterHeader = res.headers.get("retry-after") || res.headers.get("Retry-After");
+        const retryAfterSec = Number(retryAfterHeader);
+        const retryHintSec = Number.isFinite(retryAfterSec) && retryAfterSec > 0 ? retryAfterSec : null;
+        const apiErrorType = errBody?.error?.type || null;
+        const apiErrorMessage = errBody?.error?.message || null;
+        const isDailyLimit = /daily|spend|credit balance/i.test(apiErrorMessage || "");
 
         if (attempt429 >= MAX_429_ATTEMPTS) {
-          const message = isDailyQuota
-            ? "Daily Gemini quota exhausted. Try again tomorrow, switch keys, or upgrade to a paid tier."
+          const message = isDailyLimit
+            ? "Anthropic spend/daily limit reached. Check your plan and billing in the Anthropic Console."
             : (retryHintSec
                 ? `Rate limited. The API suggests waiting ~${retryHintSec}s before retrying.`
                 : "Rate limited. Wait a minute before retrying.");
           throw attachDiag(new Error(message), {
             ...baseDiag(),
             status: 429, attempt, attempts429: attempt429 + 1,
-            isDailyQuota,
+            isDailyQuota: isDailyLimit,
             retryHintSec,
-            retryAfterHeader: res.headers.get("Retry-After"),
-            quotaViolations,
-            apiErrorMessage: errBody?.error?.message || null,
-            apiErrorStatus: errBody?.error?.status || null,
+            retryAfterHeader,
+            apiErrorMessage,
+            apiErrorStatus: apiErrorType,
             responseHeaders,
             responseBody: rawText.slice(0, 4000),
           });
         }
-        // First 429: honor Retry-After or RetryInfo, fall back to 8s.
-        const retryAfter = Number(res.headers.get("Retry-After"));
-        const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
-          ? retryAfter * 1000
-          : (retryHintSec ? Math.min(retryHintSec, 30) * 1000 : 8000);
+        const waitMs = retryHintSec ? Math.min(retryHintSec, 30) * 1000 : 8000;
         attempt429++;
         await sleep(waitMs);
         continue;
       }
       if (res.status === 401 || res.status === 403) {
         const bodyText = await res.clone().text().catch(() => "");
-        throw attachDiag(new Error("Invalid API key. Check your Gemini key in Settings."), {
+        throw attachDiag(new Error("Invalid API key. Check your Anthropic key in Settings."), {
           ...baseDiag(), status: res.status, attempt, attempts429: attempt429,
           responseHeaders, responseBody: bodyText.slice(0, 4000),
+        });
+      }
+      if (res.status === 400) {
+        const bodyText = await res.clone().text().catch(() => "");
+        let parsed = null;
+        try { parsed = JSON.parse(bodyText); } catch { /* not JSON */ }
+        throw attachDiag(new Error(parsed?.error?.message || "Bad request"), {
+          ...baseDiag(), status: 400, attempt, attempts429: attempt429,
+          responseHeaders, apiErrorStatus: parsed?.error?.type || null,
+          apiErrorMessage: parsed?.error?.message || null,
+          responseBody: bodyText.slice(0, 4000),
         });
       }
       const data = await res.json();
       if (data.error) {
         throw attachDiag(new Error(data.error.message || "API error"), {
           ...baseDiag(), status: res.status, attempt, attempts429: attempt429,
-          responseHeaders, apiErrorStatus: data.error.status || null,
+          responseHeaders, apiErrorStatus: data.error.type || null,
+          apiErrorMessage: data.error.message || null,
           responseBody: JSON.stringify(data).slice(0, 4000),
         });
       }
-      const text = (data.candidates?.[0]?.content?.parts || [])
-        .map(p => p.text || "")
-        .join("");
-      return { content: [{ type: "text", text }], _raw: data };
+      // Anthropic responses already match the { content: [{ type, text }, ...] }
+      // shape that call sites expect, so return as-is.
+      return data;
     } catch (err) {
       const isRetryable = !err.message.includes("Rate limited")
-        && !err.message.includes("Daily Gemini quota")
-        && !err.message.includes("Invalid API key");
+        && !err.message.includes("Anthropic spend")
+        && !err.message.includes("Invalid API key")
+        && !err.message.includes("Bad request");
       if (attempt < retries && isRetryable) {
         await sleep(1000 * Math.pow(2, attempt));
         continue;
@@ -398,7 +395,7 @@ function LoginScreen({ onSignIn }) {
         <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: 32, marginBottom: 16 }}>
           <p style={{ fontSize: 14, color: C.textDim, lineHeight: 1.7, marginBottom: 28 }}>
             Sign in with your Google account to get started. Everyone can use APEX Eagle — you just need a free{" "}
-            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">Google Gemini API key</a>.
+            <a href="https://console.anthropic.com" target="_blank" rel="noreferrer">Anthropic API key</a>.
           </p>
 
           <button
@@ -455,25 +452,28 @@ function ApiKeyPrompt({ user, onSetKey, onLogout }) {
 
   const handleSubmit = async () => {
     const trimmed = keyInput.trim();
-    if (!trimmed) { setKeyError("Please enter your Gemini API key."); return; }
-    if (!trimmed.startsWith("AIza")) { setKeyError("That doesn't look like a Gemini key (should start with AIza)."); return; }
+    if (!trimmed) { setKeyError("Please enter your Anthropic API key."); return; }
+    if (!trimmed.startsWith("sk-ant-")) { setKeyError("That doesn't look like an Anthropic key (should start with sk-ant-)."); return; }
     setKeyError(null);
     setValidating(true);
     try {
-      // Quick validation ping — cheap request against gemini-2.5-flash
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(trimmed)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: "ping" }] }],
-            generationConfig: { maxOutputTokens: 8 },
-          }),
-        }
-      );
+      // Quick validation ping — cheap Haiku request
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": trimmed,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 8,
+          messages: [{ role: "user", content: "ping" }],
+        }),
+      });
       if (res.status === 401 || res.status === 403) {
-        setKeyError("Invalid API key — Google rejected it. Double-check your key.");
+        setKeyError("Invalid API key — Anthropic rejected it. Double-check your key.");
         setValidating(false);
         return;
       }
@@ -497,14 +497,14 @@ function ApiKeyPrompt({ user, onSetKey, onLogout }) {
 
         <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: 28 }}>
           <p style={{ fontSize: 14, color: C.textDim, lineHeight: 1.7, marginBottom: 20 }}>
-            Enter your <strong style={{ color: C.text, fontWeight: 600 }}>Google Gemini API key</strong>. It is saved only in your browser's localStorage and sent exclusively to Google's Generative Language API.
+            Enter your <strong style={{ color: C.text, fontWeight: 600 }}>Anthropic API key</strong>. It is saved only in your browser's localStorage and sent exclusively to Anthropic's API.
           </p>
 
           <input
             type="password"
             value={keyInput}
             onChange={e => { setKeyInput(e.target.value); setKeyError(null); }}
-            placeholder="AIza…"
+            placeholder="sk-ant-api03-…"
             autoFocus
             style={{
               borderColor: keyError ? C.sell : C.border,
@@ -544,7 +544,7 @@ function ApiKeyPrompt({ user, onSetKey, onLogout }) {
           </button>
 
           <p style={{ fontSize: 12, color: C.muted, marginTop: 18, lineHeight: 1.7 }}>
-            Get your key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a>. Set a budget alert in Google Cloud Billing to cap costs.
+            Get your key at <a href="https://console.anthropic.com" target="_blank" rel="noreferrer">console.anthropic.com</a> → API Keys. Set a monthly spend cap in Settings to control costs.
           </p>
         </div>
       </div>
@@ -1121,7 +1121,7 @@ function OutcomePanel({ status }) {
         <div style={{ fontSize: 12, color: goalColor, textTransform: "uppercase", letterSpacing: "0.14em", fontWeight: 700 }}>
           🎯 Outcome loop {status.goalMet ? "— goal met ✓" : `— iteration ${status.iteration}/3`}
         </div>
-        <div style={{ fontSize: 11, color: C.muted }}>Gemini Flash grader · Find ≥1 opportunity</div>
+        <div style={{ fontSize: 11, color: C.muted }}>Haiku grader · Find ≥1 opportunity</div>
       </div>
       {status.criteria && Object.keys(status.criteria).length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 6, marginBottom: 10 }}>
@@ -1165,7 +1165,7 @@ function ErrorBanner({ error, onDismiss }) {
   const stack = typeof error === "string" ? null : error.stack;
 
   const isRateLimit = /rate limited|quota/i.test(message);
-  const isDailyQuota = /daily.*quota/i.test(message);
+  const isDailyQuota = /daily|spend/i.test(message);
 
   // Build a single copyable diagnostic blob.
   const debugBlob = JSON.stringify({
@@ -1225,7 +1225,7 @@ function ErrorBanner({ error, onDismiss }) {
 
       {isDailyQuota && (
         <div style={{ marginTop: 10, fontSize: 12, color: C.textDim, lineHeight: 1.6, background: "rgba(240,193,75,0.07)", border: "1px solid rgba(240,193,75,0.2)", borderRadius: 6, padding: "8px 10px" }}>
-          💡 Daily quota resets at 00:00 Pacific Time (per Google's quota window). Switching to a paid tier raises this immediately.
+          💡 Check your <a href="https://console.anthropic.com/settings/usage" target="_blank" rel="noreferrer">usage</a> and <a href="https://console.anthropic.com/settings/limits" target="_blank" rel="noreferrer">spend caps</a> in the Anthropic Console. Topping up credits or raising the monthly limit resolves this.
         </div>
       )}
 
@@ -1309,23 +1309,26 @@ function ManageKeyModal({ onClose, onUpdate }) {
   const handleSave = async () => {
     const trimmed = keyInput.trim();
     if (!trimmed) { setErr("Please enter a key."); return; }
-    if (!trimmed.startsWith("AIza")) { setErr("Doesn't look like a Gemini key (should start with AIza)."); return; }
+    if (!trimmed.startsWith("sk-ant-")) { setErr("Doesn't look like an Anthropic key (should start with sk-ant-)."); return; }
     setErr(null); setValidating(true);
     try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(trimmed)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: "ping" }] }],
-            generationConfig: { maxOutputTokens: 8 },
-          }),
-        }
-      );
-      if (res.status === 401 || res.status === 403) { setErr("Invalid key — Google rejected it."); setValidating(false); return; }
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": trimmed,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 8,
+          messages: [{ role: "user", content: "ping" }],
+        }),
+      });
+      if (res.status === 401 || res.status === 403) { setErr("Invalid key — Anthropic rejected it."); setValidating(false); return; }
     } catch { /* accept anyway */ }
-    localStorage.setItem("apex_gemini_key", trimmed);
+    localStorage.setItem("apex_anthropic_key", trimmed);
     onUpdate(trimmed);
     setSaved(true);
     setValidating(false);
@@ -1336,13 +1339,13 @@ function ManageKeyModal({ onClose, onUpdate }) {
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", backdropFilter: "blur(4px)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
       onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: 28, width: "100%", maxWidth: 420 }}>
-        <div style={{ fontSize: 18, color: C.text, fontWeight: 700, marginBottom: 8 }}>Update Gemini API Key</div>
+        <div style={{ fontSize: 18, color: C.text, fontWeight: 700, marginBottom: 8 }}>Update Anthropic API Key</div>
         <div style={{ fontSize: 13, color: C.textDim, marginBottom: 18, lineHeight: 1.6 }}>The key is stored only in this browser.</div>
         <input
           type="password"
           value={keyInput}
           onChange={e => { setKeyInput(e.target.value); setErr(null); }}
-          placeholder="AIza…"
+          placeholder="sk-ant-api03-…"
           autoFocus
           style={{ borderColor: err ? C.sell : C.border, marginBottom: 10 }}
           onKeyDown={e => e.key === "Enter" && !validating && handleSave()}
@@ -1444,10 +1447,11 @@ export default function App() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    // Clean up legacy Anthropic key if present
+    // Clean up legacy keys from previous providers if present.
     if (localStorage.getItem("apex_api_key")) localStorage.removeItem("apex_api_key");
+    if (localStorage.getItem("apex_gemini_key")) localStorage.removeItem("apex_gemini_key");
     const storedUser = localStorage.getItem("apex_user");
-    const storedKey = localStorage.getItem("apex_gemini_key");
+    const storedKey = localStorage.getItem("apex_anthropic_key");
     if (storedUser) {
       try { setUser(JSON.parse(storedUser)); } catch { localStorage.removeItem("apex_user"); }
     }
@@ -1460,20 +1464,20 @@ export default function App() {
     localStorage.setItem("apex_user", JSON.stringify(userObj));
     setUser(userObj);
     if (userData.email === SPECIAL_USER_EMAIL && SPECIAL_USER_API_KEY) {
-      localStorage.setItem("apex_gemini_key", SPECIAL_USER_API_KEY);
+      localStorage.setItem("apex_anthropic_key", SPECIAL_USER_API_KEY);
       setApiKey(SPECIAL_USER_API_KEY);
     }
   }, []);
 
   const handleSetApiKey = useCallback((key) => {
-    localStorage.setItem("apex_gemini_key", key);
+    localStorage.setItem("apex_anthropic_key", key);
     setApiKey(key);
   }, []);
 
   const handleLogout = useCallback(async () => {
     try { await signOutFirebase(); } catch { /* ignore */ }
     localStorage.removeItem("apex_user");
-    localStorage.removeItem("apex_gemini_key");
+    localStorage.removeItem("apex_anthropic_key");
     setUser(null);
     setApiKey(null);
   }, []);
@@ -1620,7 +1624,7 @@ Return ONLY valid JSON, no markdown:
         const normalized = normalizeSignals(result.signals, leverage);
 
         setLoaderStep(`🔍 Grader evaluating iteration ${iter}…`);
-        const graderPrompt = `You are the APEX Eagle Outcome Grader running on Gemini 2.5 Flash. You did NOT produce this output. Evaluate it independently.
+        const graderPrompt = `You are the APEX Eagle Outcome Grader running on Claude Haiku 4.5. You did NOT produce this output. Evaluate it independently.
 
 ## RUBRIC
 ${OUTCOME_RUBRIC}
@@ -1632,7 +1636,7 @@ Return ONLY valid JSON:
 {"passed":<true if ALL 6 criteria pass>,"goalMet":<true if C1+C2 both pass>,"criteria":{"C1":{"pass":<bool>,"note":"<brief>"},"C2":{"pass":<bool>,"note":"<brief>"},"C3":{"pass":<bool>,"note":"<brief>"},"C4":{"pass":<bool>,"note":"<brief>"},"C5":{"pass":<bool>,"note":"<brief>"},"C6":{"pass":<bool>,"note":"<brief>"}},"feedback":"<if failed: precise instructions. If passed: All criteria met.>"}`;
 
         const graderData = await callApi(apiKey, {
-          model: "gemini-2.5-flash",
+          model: "claude-haiku-4-5-20251001",
           max_tokens: 800,
           messages: [{ role: "user", content: graderPrompt }],
         }, 3, `grader-iter-${iter}`);
@@ -1766,7 +1770,7 @@ ohlcv: exactly 20 candles ending near current price. Never fabricate specific do
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", paddingTop: 72, gap: 20, textAlign: "center" }}>
                 <div className="eagle-anim" style={{ opacity: 0.45 }}><Eagle size={64} /></div>
                 <div style={{ fontFamily: FONT_DISPLAY, fontSize: 22, fontWeight: 700, color: C.text, letterSpacing: "0.04em" }}>Select assets &amp; analyze</div>
-                <div style={{ fontSize: 14, color: C.textDim, lineHeight: 1.7, maxWidth: 320 }}>Go to Settings, pick tickers and risk parameters, then run the analysis. A Gemini Flash grader verifies every result before showing it.</div>
+                <div style={{ fontSize: 14, color: C.textDim, lineHeight: 1.7, maxWidth: 320 }}>Go to Settings, pick tickers and risk parameters, then run the analysis. A Claude Haiku grader verifies every result before showing it.</div>
                 <button onClick={() => setTab("settings")} style={{ padding: "12px 28px", background: C.accent, color: "#001318", border: "none", fontWeight: 700, fontSize: 14, letterSpacing: "0.06em", borderRadius: 10, cursor: "pointer" }}>⚙ Open Settings</button>
               </div>
             )}
@@ -1830,12 +1834,12 @@ ohlcv: exactly 20 candles ending near current price. Never fabricate specific do
 
             {user.email !== SPECIAL_USER_EMAIL && (
               <button onClick={() => setShowKeyModal(true)} style={{ width: "100%", padding: "12px 16px", background: "transparent", border: `1px solid ${C.border}`, color: C.textDim, borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: "pointer", marginBottom: 16 }}>
-                🔑 Update Gemini API Key
+                🔑 Update Anthropic API Key
               </button>
             )}
 
             <div style={{ background: "rgba(125,146,220,0.08)", border: "1px solid rgba(125,146,220,0.22)", borderRadius: 8, padding: "12px 14px", marginBottom: 12, fontSize: 13, color: C.inst, lineHeight: 1.6 }}>
-              🎯 <strong style={{ fontWeight: 600 }}>Outcome loop</strong> — Gemini 3.5 Flash generates signals, Gemini 2.5 Flash grader verifies (≥1 opportunity, conf ≥65%, tight SL, R:R ≥1.5). Up to 3 iterations.
+              🎯 <strong style={{ fontWeight: 600 }}>Outcome loop</strong> — Claude Sonnet generates signals, Claude Haiku grader verifies (≥1 opportunity, conf ≥65%, tight SL, R:R ≥1.5). Up to 3 iterations.
             </div>
             <div style={{ background: "rgba(240,193,75,0.07)", border: "1px solid rgba(240,193,75,0.22)", borderRadius: 8, padding: "12px 14px", marginBottom: 20, fontSize: 13, color: C.hold, lineHeight: 1.6 }}>
               ⚠ AI signals are informational only. Day trading carries substantial risk. Never invest more than you can afford to lose.

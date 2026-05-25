@@ -10,5 +10,5 @@ compatibility_flags = ["nodejs_compat"]
 crons = ["0 6 * * 1", "0 6 * * 3"]
 
 # Secrets — set via Cloudflare dashboard, never stored here:
-#   GEMINI_API_KEY
+#   ANTHROPIC_API_KEY
 #   RESEND_API_KEY

@@ -8,7 +8,7 @@ Condensed quick-start. For the full walkthrough (Firebase project setup, Resend 
 
 - GitHub account
 - Cloudflare account (free, no credit card)
-- Google Gemini API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) (starts with `AIza...`)
+- Anthropic API key from [console.anthropic.com](https://console.anthropic.com) (starts with `sk-ant-api03-...`)
 - Resend account + API key from [resend.com](https://resend.com) (starts with `re_...`)
 - Firebase project with Google sign-in enabled — see "Firebase setup" below
 
@@ -40,7 +40,7 @@ No Google Cloud Console or OAuth client ID setup is required — Firebase handle
    | `VITE_FIREBASE_AUTH_DOMAIN` | `<project-id>.firebaseapp.com` | Yes |
    | `VITE_FIREBASE_PROJECT_ID` | Firebase project id | Yes |
    | `VITE_FIREBASE_APP_ID` | Firebase web app id | Yes |
-   | `VITE_SPECIAL_USER_KEY` | Gemini key for `ingo.taraske@gmail.com` (skips BYOK prompt) | Optional |
+   | `VITE_SPECIAL_USER_KEY` | Anthropic key for `ingo.taraske@gmail.com` (skips BYOK prompt) | Optional |
 
    Every push to `main` triggers a rebuild.
 
@@ -59,7 +59,7 @@ No Google Cloud Console or OAuth client ID setup is required — Firebase handle
 
    | Secret | Value |
    |---|---|
-   | `GEMINI_API_KEY` | Google Gemini API key (`AIza...`) |
+   | `ANTHROPIC_API_KEY` | Anthropic API key (`sk-ant-api03-...`) |
    | `RESEND_API_KEY` | Resend key (`re_...`) |
 
 5. (Optional) plain-text env vars:
@@ -89,7 +89,7 @@ The app works on desktop and mobile browsers — the UI adapts to phone widths.
 ### First-time setup (per browser)
 
 1. Open the URL and click **Sign in with Google** → choose your Google account in the popup.
-2. The app prompts for a Gemini API key. Grab one at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) (free tier is enough to start), paste it, click **Continue →**. It is validated against `gemini-2.5-flash` and then stored in `localStorage` — only this browser has it.
+2. The app prompts for an Anthropic API key. Grab one at [console.anthropic.com](https://console.anthropic.com) → **API Keys** (set a monthly spend cap in **Settings → Limits** while you're there), paste it, click **Continue →**. It is validated against `claude-haiku-4-5` and then stored in `localStorage` — only this browser has it.
 3. You land on the Signals tab with an empty state. Bottom navigation:
    - **📊 Signals** — current results + outcome-loop status
    - **⚙️ Settings** — watchlist, budget, risk, leverage, key management
@@ -124,25 +124,25 @@ The Analysis Summary panel underneath shows the count of selected assets, your c
 1. Make sure at least one ticker is selected (cyan pill).
 2. Tap **▶ ANALYZE NOW** in the Settings tab — or the **▶ ANALYZE** button in the bottom nav from any tab.
 3. A progress bar appears at the top of the screen. The outcome loop runs up to 3 iterations:
-   - **Gemini 3.5 Flash** generates signals using Google Search grounding for live prices, dark-pool prints, options flow, institutional bias, and recent news.
-   - **Gemini 2.5 Flash** grader scores the result against the 6-criterion rubric (opportunity found, confidence ≥65%, tight stop-loss, R:R ≥1.5, specific entry, valid current price).
+   - **Claude Sonnet 4.5** generates signals using Anthropic's `web_search` tool for live prices, dark-pool prints, options flow, institutional bias, and recent news.
+   - **Claude Haiku 4.5** grader scores the result against the 6-criterion rubric (opportunity found, confidence ≥65%, tight stop-loss, R:R ≥1.5, specific entry, valid current price).
    - If the grader passes (or just the "goal met" criteria), iteration stops early.
 4. Results land on the **Signals** tab: one card per ticker with action (BUY/SELL/HOLD), confidence, suggested leverage, SL/TP percentages and price levels, RSI, SMA20/50, candlestick chart, position sizing, and reasoning.
 5. The **Portfolio** tab fills in with overall market sentiment, total margin in use, and a portfolio-at-risk bar.
 
-A typical run costs ~$0.02–0.10 in Gemini API usage and takes 20–60 seconds depending on iterations.
+A typical run costs ~$0.05–0.20 in Anthropic API usage and takes 20–60 seconds depending on iterations.
 
-### Updating your Gemini key
+### Updating your Anthropic key
 
-Settings tab → **🔑 Update Gemini API Key** → paste a new key → **Save**. The old key is overwritten in `localStorage`.
+Settings tab → **🔑 Update Anthropic API Key** → paste a new key → **Save**. The old key is overwritten in `localStorage`.
 
 ### Signing out
 
-Header → **Sign out** (top right). This clears the local Google session and your `localStorage` (user + Gemini key). Your watchlist, budget, and risk settings remain on this browser unless you also clear site data — they re-attach on next login.
+Header → **Sign out** (top right). This clears the local Google session and your `localStorage` (user + Anthropic key). Your watchlist, budget, and risk settings remain on this browser unless you also clear site data — they re-attach on next login.
 
 ### Privacy & security notes
 
-- Your Gemini API key lives only in this browser's `localStorage`. It is sent directly to `generativelanguage.googleapis.com` — no APEX Eagle server sees it.
+- Your Anthropic API key lives only in this browser's `localStorage`. It is sent directly to `api.anthropic.com` (with the `anthropic-dangerous-direct-browser-access` header that Anthropic requires for browser calls) — no APEX Eagle server sees it.
 - Anyone with access to this browser (devtools → Application → Local Storage) can read the key. Don't share a public Pages URL if you don't want strangers using their own keys on it.
 - Firebase Auth means Google sees your sign-in. The app stores your email, name, and avatar URL locally to display them — nothing more.
 
@@ -153,10 +153,10 @@ Header → **Sign out** (top right). This clears the local Google session and yo
 To fire the scheduler without waiting for cron:
 
 ```
-https://<your-worker-subdomain>.workers.dev/trigger?secret=<YOUR_GEMINI_API_KEY>
+https://<your-worker-subdomain>.workers.dev/trigger?secret=<YOUR_ANTHROPIC_API_KEY>
 ```
 
-The Gemini API key doubles as the manual-trigger auth token.
+The Anthropic API key doubles as the manual-trigger auth token.
 
 ---
 
@@ -166,7 +166,7 @@ The Gemini API key doubles as the manual-trigger auth token.
 |---|---|
 | Build fails on Cloudflare Pages | Check build logs; verify `package.json` is in repo root |
 | "Firebase is not configured" on login screen | Recheck the four `VITE_FIREBASE_*` env vars and redeploy |
-| "Invalid API key" when saving Gemini key | Key must start with `AIza`. Verify it works at [aistudio.google.com](https://aistudio.google.com) |
+| "Invalid API key" when saving Anthropic key | Key must start with `sk-ant-`. Verify it works at [console.anthropic.com](https://console.anthropic.com) → API Keys |
 | Worker not firing on cron | Verify cron expressions in **Settings → Triggers**; crons run in UTC |
 | No email arrives | The Worker only emails when at least one BUY signal has confidence ≥65%. Check the Worker's **Logs** tab |
 | Email in spam | Mark as not spam, or set up a custom domain in Resend |
@@ -186,8 +186,8 @@ GitHub repo
            ├── Cron: Mon 06:00 UTC
            ├── Cron: Wed 06:00 UTC
            ▼
-       Gemini 3.5 Flash (Google Search grounding)
-       + Gemini 2.5 Flash grader (outcome loop)
+       Claude Sonnet 4.5 (web_search tool)
+       + Claude Haiku 4.5 grader (outcome loop)
            ▼ BUY signal found (conf ≥ 65%)
        Resend API ── HTML email ── recipient
 ```
