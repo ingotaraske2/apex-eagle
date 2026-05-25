@@ -220,6 +220,10 @@ async function callApi(apiKey, body, retries = 3) {
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
+  // Cap 429 retries to 1 (free tier is tight; aggressive retry just burns the next quota window).
+  const MAX_429_ATTEMPTS = 1;
+  let attempt429 = 0;
+
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetch(url, {
@@ -232,8 +236,37 @@ async function callApi(apiKey, body, retries = 3) {
         throw new Error(`Server error (${res.status}). Try again.`);
       }
       if (res.status === 429) {
-        if (attempt < retries) { await sleep(3000 * Math.pow(2, attempt)); continue; }
-        throw new Error("Rate limited. Wait a few seconds.");
+        if (attempt429 >= MAX_429_ATTEMPTS) {
+          // Try to read structured retry hint from Gemini's error payload.
+          let retryHintSec = null;
+          let isDailyQuota = false;
+          try {
+            const errBody = await res.clone().json();
+            const details = errBody?.error?.details || [];
+            for (const d of details) {
+              if (d?.["@type"]?.includes("RetryInfo") && typeof d.retryDelay === "string") {
+                const m = d.retryDelay.match(/(\d+)s/);
+                if (m) retryHintSec = Number(m[1]);
+              }
+              if (d?.["@type"]?.includes("QuotaFailure")) {
+                const v = JSON.stringify(d.violations || []);
+                if (/PerDay|day/i.test(v)) isDailyQuota = true;
+              }
+            }
+          } catch { /* ignore parse errors */ }
+          if (isDailyQuota) {
+            throw new Error("Daily Gemini quota exhausted. Try again tomorrow, switch keys, or upgrade to a paid tier.");
+          }
+          throw new Error(retryHintSec
+            ? `Rate limited. The API suggests waiting ~${retryHintSec}s before retrying.`
+            : "Rate limited. Wait a minute before retrying.");
+        }
+        // Honor Retry-After header if provided, else default 8s.
+        const retryAfter = Number(res.headers.get("Retry-After"));
+        const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 8000;
+        attempt429++;
+        await sleep(waitMs);
+        continue;
       }
       if (res.status === 401 || res.status === 403) {
         throw new Error("Invalid API key. Check your Gemini key in Settings.");
