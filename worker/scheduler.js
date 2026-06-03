@@ -12,7 +12,7 @@
  *   RESEND_API_KEY      — your Resend API key
  *
  * Optional env vars (set in Cloudflare dashboard → Variables):
- *   RECIPIENT_EMAIL     — defaults to ingo.taraske@gmail.com
+ *   RECIPIENT_EMAIL     — recipient email address (required)
  *   FROM_EMAIL          — defaults to apex@resend.dev
  *   BUDGET              — portfolio budget USD, defaults to 10000
  *   LEVERAGE            — max leverage 1-5, defaults to 2
@@ -434,7 +434,7 @@ function buildEmail(signals, sentiment, iterLog, budget, leverage, runDate) {
 
 // ── SEND EMAIL VIA RESEND ─────────────────────────────────────────────────────
 async function sendEmail(env, subject, html) {
-  const recipient = env.RECIPIENT_EMAIL || "ingo.taraske@gmail.com";
+  const recipient = env.RECIPIENT_EMAIL;
   const from = env.FROM_EMAIL || "APEX Eagle <apex@resend.dev>";
 
   const res = await fetch("https://api.resend.com/emails", {
@@ -452,11 +452,30 @@ async function sendEmail(env, subject, html) {
   return data;
 }
 
+// ── KEEP-ALIVE PINGS ──────────────────────────────────────────────────────────
+const PING_URLS = [
+  "https://bjj-comp-saas.onrender.com/health",
+  "https://bjj-comp-saas-ui.onrender.com/health",
+];
+
+async function pingServices() {
+  await Promise.all(
+    PING_URLS.map(url =>
+      fetch(url, { signal: AbortSignal.timeout(10000) })
+        .then(r => console.log(`[ping] ${url} → ${r.status}`))
+        .catch(err => console.warn(`[ping] ${url} failed: ${err.message}`))
+    )
+  );
+}
+
 // ── MAIN HANDLER ─────────────────────────────────────────────────────────────
 export default {
-  // Cron trigger handler
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(run(env));
+    if (event.cron === "* * * * *") {
+      ctx.waitUntil(pingServices());
+    } else {
+      ctx.waitUntil(run(env));
+    }
   },
 
   // HTTP handler for manual test trigger

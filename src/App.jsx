@@ -11,10 +11,6 @@ const FIREBASE_CONFIG = {
   appId:      import.meta.env.VITE_FIREBASE_APP_ID      || "YOUR_APP_ID",
 };
 
-// ingo.taraske@gmail.com uses embedded key — all other users supply their own
-const SPECIAL_USER_EMAIL   = "ingo.taraske@gmail.com";
-const SPECIAL_USER_API_KEY = import.meta.env.VITE_SPECIAL_USER_KEY || "";
-
 // ── CONSTANTS ─────────────────────────────────────────────────────────────────
 const DEFAULT_CATEGORIES = [
   { id: "ai", name: "AI", tickers: ["NVDA", "MSFT", "GOOGL", "META", "AMD", "PLTR", "SMCI", "SOUN"] },
@@ -1463,10 +1459,6 @@ export default function App() {
     const userObj = { email: userData.email, name: userData.name, picture: userData.picture };
     localStorage.setItem("apex_user", JSON.stringify(userObj));
     setUser(userObj);
-    if (userData.email === SPECIAL_USER_EMAIL && SPECIAL_USER_API_KEY) {
-      localStorage.setItem("apex_anthropic_key", SPECIAL_USER_API_KEY);
-      setApiKey(SPECIAL_USER_API_KEY);
-    }
   }, []);
 
   const handleSetApiKey = useCallback((key) => {
@@ -1832,11 +1824,9 @@ ohlcv: exactly 20 candles ending near current price. Never fabricate specific do
               <div style={{ fontSize: 13, color: C.muted, marginTop: 6 }}>Max loss per trade: <span className="mono" style={{ color: C.sell }}>−{fmt(budget * riskPct / 100)}</span></div>
             </div>
 
-            {user.email !== SPECIAL_USER_EMAIL && (
-              <button onClick={() => setShowKeyModal(true)} style={{ width: "100%", padding: "12px 16px", background: "transparent", border: `1px solid ${C.border}`, color: C.textDim, borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: "pointer", marginBottom: 16 }}>
-                🔑 Update Anthropic API Key
-              </button>
-            )}
+            <button onClick={() => setShowKeyModal(true)} style={{ width: "100%", padding: "12px 16px", background: "transparent", border: `1px solid ${C.border}`, color: C.textDim, borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: "pointer", marginBottom: 16 }}>
+              🔑 Update Anthropic API Key
+            </button>
 
             <div style={{ background: "rgba(125,146,220,0.08)", border: "1px solid rgba(125,146,220,0.22)", borderRadius: 8, padding: "12px 14px", marginBottom: 12, fontSize: 13, color: C.inst, lineHeight: 1.6 }}>
               🎯 <strong style={{ fontWeight: 600 }}>Outcome loop</strong> — Claude Sonnet generates signals, Claude Haiku grader verifies (≥1 opportunity, conf ≥65%, tight SL, R:R ≥1.5). Up to 3 iterations.
