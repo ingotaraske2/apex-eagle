@@ -238,6 +238,7 @@ async function callApi(apiKey, body, retries = 3, callLabel = "api") {
           "Content-Type": "application/json",
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
+          "anthropic-beta": "prompt-caching-1",
           "anthropic-dangerous-direct-browser-access": "true",
         },
         body: JSON.stringify(requestBody),
@@ -834,31 +835,29 @@ function EntryDiagram({ signal }) {
   const tpPrice = isBuy ? cp * (1 + tpPct / 100) : cp * (1 - tpPct / 100);
 
   // SVG dimensions
-  const W = 340, H = 200;
-  const padL = 60, padR = 16, padT = 16, padB = 24;
+  const W = 360, H = 260;
+  const padL = 58, padR = 90, padT = 20, padB = 44;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
 
   const allPrices = [avoidPrice, entryHigh, entryLow, slPrice, tpPrice];
-  const minP = Math.min(...allPrices) * 0.9975;
-  const maxP = Math.max(...allPrices) * 1.0025;
+  const minP = Math.min(...allPrices) * 0.997;
+  const maxP = Math.max(...allPrices) * 1.003;
   const range = maxP - minP;
 
   const yP = p => padT + chartH - ((p - minP) / range) * chartH;
   const xAt = frac => padL + frac * chartW;
 
   // Path: morning peak → pullback → consolidation → confirmation candle → entry
-  const morningX = xAt(0.18);
-  const morningY = isBuy ? yP(avoidPrice * 0.998) : yP(slPrice * 0.998);
-  const pullEndX = xAt(0.42);
+  const morningX = xAt(0.15);
+  const morningY = isBuy ? yP(avoidPrice * 0.999) : yP(slPrice * 0.999);
+  const pullEndX = xAt(0.40);
   const pullEndY = isBuy ? yP(entryLow * 1.001) : yP(entryHigh * 0.999);
   const consolidY = pullEndY;
-  const consolidX1 = xAt(0.5);
-  const consolidX2 = xAt(0.62);
-  const confirmX = xAt(0.74);
+  const confirmX = xAt(0.65);
   const confirmY = yP(entryHigh);
-  const endX = xAt(0.92);
-  const endY = isBuy ? yP(tpPrice * 0.6 + entryHigh * 0.4) : yP(slPrice * 0.5 + entryLow * 0.5);
+  const endX = xAt(0.82);
+  const endY = isBuy ? yP(tpPrice * 0.55 + entryHigh * 0.45) : yP(slPrice * 0.45 + entryLow * 0.55);
 
   const accentColor = isBuy ? C.buy : C.sell;
   const entryZoneColor = isBuy ? "rgba(34,211,154,0.12)" : "rgba(255,92,124,0.12)";
@@ -875,7 +874,7 @@ function EntryDiagram({ signal }) {
   const mutedStyle = { fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.textDim };
 
   // Consolidation dots
-  const dots = [xAt(0.49), xAt(0.54), xAt(0.59), xAt(0.63)].map((x, i) => ({
+  const dots = [xAt(0.44), xAt(0.49), xAt(0.54), xAt(0.59)].map((x, i) => ({
     x, y: consolidY + (i % 2 === 0 ? -1.5 : 0),
   }));
 
@@ -945,42 +944,48 @@ function EntryDiagram({ signal }) {
           stroke="#6a82d4" strokeWidth="2" fill="none" strokeLinecap="round"
         />
         {/* Pullback label */}
-        <text x={xAt(0.27)} y={morningY + 38} style={{ ...mutedStyle, fontStyle: "italic" }}>Intraday pullback</text>
+        <text x={xAt(0.20)} y={(morningY + pullEndY) / 2 + 4} style={{ ...mutedStyle, fontStyle: "italic" }}>Intraday pullback</text>
 
         {/* Consolidation dots */}
         {dots.map((d, i) => (
           <circle key={i} cx={d.x} cy={d.y} r="2.5" fill="#6a82d4" opacity="0.8" />
         ))}
         {/* "Waiting for signal" label */}
-        <text x={xAt(0.52)} y={consolidY + 14} textAnchor="middle" style={mutedStyle}>Waiting for signal</text>
+        <text x={xAt(0.51)} y={consolidY + 13} textAnchor="middle" style={mutedStyle}>Waiting for signal</text>
 
-        {/* Prior consolidation base bracket */}
-        <line x1={morningX - 8} y1={yP(entryLow) + 2} x2={xAt(0.38)} y2={yP(entryLow) + 2}
+        {/* Prior consolidation base bracket — placed in bottom pad area */}
+        <line x1={padL + 4} y1={padT + chartH + 6} x2={xAt(0.36)} y2={padT + chartH + 6}
           stroke="rgba(255,92,124,0.5)" strokeWidth="1" />
-        <text x={(morningX - 8 + xAt(0.38)) / 2} y={yP(entryLow) + 16} textAnchor="middle"
+        <text x={(padL + 4 + xAt(0.36)) / 2} y={padT + chartH + 18} textAnchor="middle"
           style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.muted }}>Prior consolidation</text>
-        <text x={(morningX - 8 + xAt(0.38)) / 2} y={yP(entryLow) + 26} textAnchor="middle"
+        <text x={(padL + 4 + xAt(0.36)) / 2} y={padT + chartH + 28} textAnchor="middle"
           style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.muted }}>base (support zone)</text>
 
         {/* Confirmation candle */}
         <line x1={candleX + candleW / 2} y1={candleHigh} x2={candleX + candleW / 2} y2={candleLow}
           stroke={accentColor} strokeWidth="1" />
         <rect x={candleX} y={Math.min(candleOpen, candleClose)} width={candleW}
-          height={Math.max(1, Math.abs(candleOpen - candleClose))}
+          height={Math.max(2, Math.abs(candleOpen - candleClose))}
           fill="none" stroke={accentColor} strokeWidth="1.5" />
 
-        {/* Volume bars below candle */}
+        {/* Volume bars in bottom pad */}
         {[confirmX - 5, confirmX, confirmX + 5].map((bx, i) => (
-          <rect key={i} x={bx - 2} y={H - padB - (i === 1 ? 14 : 10)} width={4} height={i === 1 ? 14 : 10}
+          <rect key={i} x={bx - 2} y={padT + chartH + 6 - (i === 1 ? 14 : 9)} width={4} height={i === 1 ? 14 : 9}
             fill={accentColor} opacity={i === 1 ? 0.9 : 0.55} />
         ))}
-        <text x={confirmX} y={H - padB + 12} textAnchor="middle"
+        <text x={confirmX} y={padT + chartH + 20} textAnchor="middle"
           style={{ fontSize: "7px", fontFamily: FONT_BODY, fill: C.muted }}>Volume</text>
-        <text x={confirmX} y={H - padB + 21} textAnchor="middle"
+        <text x={confirmX} y={padT + chartH + 30} textAnchor="middle"
           style={{ fontSize: "7px", fontFamily: FONT_BODY, fill: C.muted }}>Confirmation</text>
 
+        {/* 5-min candle close note — right margin column */}
+        <text x={W - padR + 4} y={Math.min(candleOpen, candleClose) - 2}
+          style={{ fontSize: "8.5px", fontFamily: FONT_BODY, fill: C.text, fontWeight: 700 }}>5-min candle close</text>
+        <text x={W - padR + 4} y={Math.min(candleOpen, candleClose) + 10}
+          style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.muted }}>above {fmtP(entryHigh)} + vol</text>
+
         {/* Confirmed entry arrow */}
-        <path d={`M ${confirmX + 12} ${confirmY + 4} C ${xAt(0.82)} ${confirmY - 10}, ${endX - 10} ${endY + 10}, ${endX} ${endY}`}
+        <path d={`M ${confirmX + 8} ${confirmY - 6} C ${xAt(0.75)} ${confirmY - 18}, ${endX - 6} ${endY + 8}, ${endX} ${endY}`}
           stroke={accentColor} strokeWidth="2.5" fill="none" strokeLinecap="round"
           markerEnd="url(#arrowhead)" />
         <defs>
@@ -988,11 +993,9 @@ function EntryDiagram({ signal }) {
             <path d="M0,0 L0,6 L6,3 Z" fill={accentColor} />
           </marker>
         </defs>
-        <text x={endX + 3} y={endY - 6} style={{ fontSize: "8px", fontFamily: FONT_BODY, fill: accentColor, fontStyle: "italic" }}>Confirmed entry</text>
-
-        {/* 5-min candle close note */}
-        <text x={confirmX - 28} y={Math.min(candleOpen, candleClose) - 14} style={{ fontSize: "8.5px", fontFamily: FONT_BODY, fill: C.text, fontWeight: 700 }}>5-min candle close</text>
-        <text x={confirmX - 28} y={Math.min(candleOpen, candleClose) - 4} style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.muted }}>above {fmtP(entryHigh)} + expanding vol</text>
+        {/* "Confirmed entry" label in right margin */}
+        <text x={W - padR + 4} y={endY - 4}
+          style={{ fontSize: "8px", fontFamily: FONT_BODY, fill: accentColor, fontStyle: "italic" }}>Confirmed entry</text>
       </svg>
       <div style={{ padding: "6px 10px", borderTop: `1px solid ${C.border}`, fontSize: 9, color: C.textDim, lineHeight: 1.55 }}>
         {signal.entryNote}
