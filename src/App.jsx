@@ -826,40 +826,30 @@ function EntryDiagram({ signal }) {
   const tpPct = signal.takeProfitPct || slPct * 2;
   const isBuy = action === "BUY";
 
-  // Price levels
-  const avoidPrice = isBuy ? cp * (1 + tpPct * 0.3 / 100) : cp * (1 - tpPct * 0.3 / 100);
+  // Price levels — avoid zone sits 1 full TP above/below current, giving vertical breathing room
+  const avoidPrice = isBuy ? cp * (1 + tpPct / 100) : cp * (1 - tpPct / 100);
   const entryHigh = cp;
-  const entryLow = isBuy ? cp * (1 - slPct * 0.6 / 100) : cp * (1 + slPct * 0.6 / 100);
-  const slPrice = isBuy ? cp * (1 - slPct / 100) : cp * (1 + slPct / 100);
-  const tpPrice = isBuy ? cp * (1 + tpPct / 100) : cp * (1 - tpPct / 100);
+  const entryLow = isBuy ? cp * (1 - slPct * 0.55 / 100) : cp * (1 + slPct * 0.55 / 100);
 
-  // SVG dimensions
-  const W = 360, H = 260;
-  const padL = 58, padR = 90, padT = 20, padB = 44;
-  const chartW = W - padL - padR;
+  // Layout constants — fixed, not derived from prices
+  // W=420: padL=52 (axis) | chartW=212 (price action) | midPad=16 | rightW=140 (annotations)
+  const W = 420, H = 220;
+  const padL = 52, chartW = 212, midPad = 16, rightX = padL + chartW + midPad;
+  const rightW = W - rightX;
+  const padT = 14, padB = 52; // padB holds volume bars + labels
   const chartH = H - padT - padB;
 
-  const allPrices = [avoidPrice, entryHigh, entryLow, slPrice, tpPrice];
-  const minP = Math.min(...allPrices) * 0.997;
-  const maxP = Math.max(...allPrices) * 1.003;
+  const allPrices = [avoidPrice, entryHigh, entryLow];
+  const minP = Math.min(...allPrices) * (isBuy ? 0.9985 : 0.9995);
+  const maxP = Math.max(...allPrices) * (isBuy ? 1.0005 : 1.0015);
   const range = maxP - minP;
 
   const yP = p => padT + chartH - ((p - minP) / range) * chartH;
-  const xAt = frac => padL + frac * chartW;
-
-  // Path: morning peak → pullback → consolidation → confirmation candle → entry
-  const morningX = xAt(0.15);
-  const morningY = isBuy ? yP(avoidPrice * 0.999) : yP(slPrice * 0.999);
-  const pullEndX = xAt(0.40);
-  const pullEndY = isBuy ? yP(entryLow * 1.001) : yP(entryHigh * 0.999);
-  const consolidY = pullEndY;
-  const confirmX = xAt(0.65);
-  const confirmY = yP(entryHigh);
-  const endX = xAt(0.82);
-  const endY = isBuy ? yP(tpPrice * 0.55 + entryHigh * 0.45) : yP(slPrice * 0.45 + entryLow * 0.55);
+  // x positions within chart area only
+  const xC = frac => padL + frac * chartW;
 
   const accentColor = isBuy ? C.buy : C.sell;
-  const entryZoneColor = isBuy ? "rgba(34,211,154,0.12)" : "rgba(255,92,124,0.12)";
+  const entryZoneColor = isBuy ? "rgba(34,211,154,0.13)" : "rgba(255,92,124,0.13)";
   const avoidZoneColor = isBuy ? "rgba(255,92,124,0.10)" : "rgba(34,211,154,0.10)";
   const avoidLineColor = isBuy ? C.sell : C.buy;
 
@@ -869,21 +859,44 @@ function EntryDiagram({ signal }) {
     return "$" + p.toFixed(2);
   };
 
-  const labelStyle = { fontSize: "8px", fontFamily: FONT_MONO, fill: C.text };
-  const mutedStyle = { fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.textDim };
+  // Key y positions
+  const yAvoid = yP(avoidPrice);
+  const yEntryHigh = yP(entryHigh);
+  const yEntryLow = yP(entryLow);
+  const entryZoneH = Math.abs(yEntryHigh - yEntryLow);
 
-  // Consolidation dots
-  const dots = [xAt(0.44), xAt(0.49), xAt(0.54), xAt(0.59)].map((x, i) => ({
-    x, y: consolidY + (i % 2 === 0 ? -1.5 : 0),
-  }));
+  // Path points
+  const morningX = xC(0.12);
+  const morningY = isBuy ? yAvoid + 4 : yAvoid - 4;
+  const pullEndX = xC(0.44);
+  const pullEndY = (yEntryHigh + yEntryLow) / 2;
 
-  // Confirmation candle
-  const candleX = confirmX - 5;
-  const candleW = 10;
-  const candleOpen = yP(entryLow * 1.005);
-  const candleClose = yP(entryHigh * 0.997);
-  const candleHigh = yP(entryHigh * (isBuy ? 1.006 : 0.994));
-  const candleLow = yP(entryLow * (isBuy ? 0.994 : 1.006));
+  // Consolidation dots — inside the chart area, vertically centred in entry zone
+  const dotY = (yEntryHigh + yEntryLow) / 2;
+  const dots = [xC(0.50), xC(0.56), xC(0.62), xC(0.68)].map(x => ({ x, y: dotY }));
+
+  // Candle in chart area (right side)
+  const candleCx = xC(0.80);
+  const candleBodyH = Math.max(entryZoneH * 0.55, 6);
+  const candleTop = yEntryHigh + (entryZoneH - candleBodyH) / 2;
+  const candleBottom = candleTop + candleBodyH;
+  const wickTop = candleTop - 5;
+  const wickBottom = candleBottom + 8;
+
+  // Arrow from candle top into right annotation area
+  const arrowStartX = candleCx + 2;
+  const arrowStartY = candleTop - 4;
+  const arrowEndX = rightX + 10;
+  const arrowEndY = padT + chartH * 0.28;
+
+  // Volume bars — in padB area, centred on candleCx
+  const volBaseY = H - padB + 8;
+  const volBars = [
+    { x: candleCx - 8, h: 9 },
+    { x: candleCx - 3, h: 16 },
+    { x: candleCx + 3, h: 12 },
+    { x: candleCx + 8, h: 9 },
+  ];
 
   return (
     <div style={{ background: "#080c12", border: `1px solid ${C.border}`, borderRadius: 4, overflow: "hidden", marginTop: 10 }}>
@@ -892,109 +905,124 @@ function EntryDiagram({ signal }) {
         <span style={{ fontSize: 9, color: accentColor, fontWeight: 700 }}>{isBuy ? "BUY" : "SELL"} SETUP</span>
       </div>
       <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block" }}>
-        {/* Avoid zone */}
-        {isBuy && (
-          <rect x={padL} y={padT} width={chartW} height={yP(avoidPrice) - padT}
-            fill={avoidZoneColor} />
-        )}
-        {!isBuy && (
-          <rect x={padL} y={yP(avoidPrice)} width={chartW} height={padT + chartH - yP(avoidPrice)}
-            fill={avoidZoneColor} />
-        )}
+        <defs>
+          <marker id={`arr-${action}`} markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto">
+            <path d="M0,0 L0,7 L7,3.5 Z" fill={accentColor} />
+          </marker>
+          <clipPath id="chartClip">
+            <rect x={padL} y={padT} width={chartW} height={chartH} />
+          </clipPath>
+        </defs>
 
-        {/* Entry zone */}
-        <rect x={padL} y={Math.min(yP(entryHigh), yP(entryLow))} width={chartW}
-          height={Math.abs(yP(entryHigh) - yP(entryLow))}
-          fill={entryZoneColor} />
+        {/* ── AVOID ZONE (top for BUY, bottom for SELL) ── */}
+        {isBuy
+          ? <rect x={padL} y={padT} width={chartW} height={Math.max(0, yAvoid - padT)} fill={avoidZoneColor} />
+          : <rect x={padL} y={yAvoid} width={chartW} height={Math.max(0, padT + chartH - yAvoid)} fill={avoidZoneColor} />
+        }
 
-        {/* Avoid zone label */}
-        <text x={padL + 6} y={isBuy ? padT + 10 : yP(avoidPrice) + 12} style={{ fontSize: "8.5px", fontFamily: FONT_BODY, fill: avoidLineColor, fontWeight: 700 }}>
-          {isBuy ? "Avoid chasing above" : "Avoid chasing below"} {fmtP(avoidPrice)}
-        </text>
-        <text x={padL + 6} y={isBuy ? padT + 21 : yP(avoidPrice) + 23} style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.muted }}>
-          Already too {isBuy ? "high" : "low"} on momentum
-        </text>
+        {/* ── ENTRY ZONE ── */}
+        <rect x={padL} y={Math.min(yEntryHigh, yEntryLow)} width={chartW}
+          height={entryZoneH} fill={entryZoneColor} />
 
-        {/* Avoid zone border line */}
-        <line x1={padL} y1={isBuy ? yP(avoidPrice) : yP(avoidPrice)} x2={W - padR} y2={isBuy ? yP(avoidPrice) : yP(avoidPrice)}
-          stroke={avoidLineColor} strokeWidth="1" strokeDasharray="3,2" opacity="0.6" />
+        {/* ── ZONE BORDER LINES ── */}
+        <line x1={padL} x2={padL + chartW} y1={yAvoid} y2={yAvoid}
+          stroke={avoidLineColor} strokeWidth="1" strokeDasharray="4,3" opacity="0.7" />
+        <line x1={padL} x2={padL + chartW} y1={yEntryHigh} y2={yEntryHigh}
+          stroke={accentColor} strokeWidth="1" strokeDasharray="4,3" opacity="0.55" />
 
-        {/* Entry zone label */}
-        <text x={padL + 6} y={yP(entryLow) - 4} style={{ fontSize: "8.5px", fontFamily: FONT_BODY, fill: accentColor, fontWeight: 700 }}>
-          Entry zone: {fmtP(entryLow)}–{fmtP(entryHigh)}
-        </text>
-        <text x={padL + 6} y={yP(entryLow) + 8} style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.textDim }}>
-          {signal.keyLevel ? signal.keyLevel.slice(0, 42) : "Prior consolidation + gap support"}
-        </text>
-
-        {/* Entry zone dashed border */}
-        <line x1={padL} y1={yP(entryHigh)} x2={W - padR} y2={yP(entryHigh)}
-          stroke={accentColor} strokeWidth="1" strokeDasharray="4,3" opacity="0.5" />
-
-        {/* Price axis labels */}
+        {/* ── PRICE AXIS ── */}
         {[avoidPrice, entryHigh, entryLow].map((p, i) => (
-          <text key={i} x={padL - 3} y={yP(p) + 3} textAnchor="end"
+          <text key={i} x={padL - 4} y={yP(p) + 3} textAnchor="end"
             style={{ fontSize: "7.5px", fontFamily: FONT_MONO, fill: C.muted }}>{fmtP(p)}</text>
         ))}
 
-        {/* Intraday pullback path */}
-        <path
-          d={`M ${morningX} ${morningY} C ${xAt(0.25)} ${morningY + 8}, ${xAt(0.35)} ${pullEndY - 16}, ${pullEndX} ${pullEndY}`}
-          stroke="#6a82d4" strokeWidth="2" fill="none" strokeLinecap="round"
-        />
-        {/* Pullback label */}
-        <text x={xAt(0.20)} y={(morningY + pullEndY) / 2 + 4} style={{ ...mutedStyle, fontStyle: "italic" }}>Intraday pullback</text>
+        {/* ── PULLBACK PATH (clipped to chart area) ── */}
+        <g clipPath="url(#chartClip)">
+          <path
+            d={`M ${morningX} ${morningY} C ${xC(0.22)} ${morningY + (pullEndY - morningY) * 0.15}, ${xC(0.38)} ${pullEndY - 10}, ${pullEndX} ${pullEndY}`}
+            stroke="#6a82d4" strokeWidth="2.2" fill="none" strokeLinecap="round"
+          />
+        </g>
 
-        {/* Consolidation dots */}
+        {/* ── CONSOLIDATION DOTS ── */}
         {dots.map((d, i) => (
-          <circle key={i} cx={d.x} cy={d.y} r="2.5" fill="#6a82d4" opacity="0.8" />
+          <circle key={i} cx={d.x} cy={d.y} r="2.8" fill="#6a82d4" opacity="0.75" />
         ))}
-        {/* "Waiting for signal" label */}
-        <text x={xAt(0.51)} y={consolidY + 13} textAnchor="middle" style={mutedStyle}>Waiting for signal</text>
 
-        {/* Prior consolidation base bracket — placed in bottom pad area */}
-        <line x1={padL + 4} y1={padT + chartH + 6} x2={xAt(0.36)} y2={padT + chartH + 6}
-          stroke="rgba(255,92,124,0.5)" strokeWidth="1" />
-        <text x={(padL + 4 + xAt(0.36)) / 2} y={padT + chartH + 18} textAnchor="middle"
+        {/* ── CONFIRMATION CANDLE ── */}
+        <line x1={candleCx} x2={candleCx} y1={wickTop} y2={wickBottom}
+          stroke={accentColor} strokeWidth="1.2" />
+        <rect x={candleCx - 5} y={candleTop} width={10} height={candleBodyH}
+          fill="none" stroke={accentColor} strokeWidth="1.8" />
+
+        {/* ── ARROW into right annotation area ── */}
+        <path
+          d={`M ${arrowStartX} ${arrowStartY} C ${arrowStartX + 10} ${arrowStartY - 12}, ${arrowEndX - 10} ${arrowEndY + 8}, ${arrowEndX} ${arrowEndY}`}
+          stroke={accentColor} strokeWidth="2.5" fill="none" strokeLinecap="round"
+          markerEnd={`url(#arr-${action})`}
+        />
+
+        {/* ── VOLUME BARS (padB area) ── */}
+        {volBars.map((b, i) => (
+          <rect key={i} x={b.x - 2} y={volBaseY - b.h} width={4} height={b.h}
+            fill={accentColor} opacity={i === 1 ? 0.95 : 0.5} />
+        ))}
+
+        {/* ── BOTTOM LABELS (padB area, no overlap with chart) ── */}
+        {/* "Prior consolidation" — left of dots */}
+        <line x1={padL + 4} x2={xC(0.40)} y1={H - padB + 4} y2={H - padB + 4}
+          stroke="rgba(255,92,124,0.45)" strokeWidth="1" />
+        <text x={(padL + 4 + xC(0.40)) / 2} y={H - padB + 16} textAnchor="middle"
           style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.muted }}>Prior consolidation</text>
-        <text x={(padL + 4 + xAt(0.36)) / 2} y={padT + chartH + 28} textAnchor="middle"
+        <text x={(padL + 4 + xC(0.40)) / 2} y={H - padB + 27} textAnchor="middle"
           style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.muted }}>base (support zone)</text>
 
-        {/* Confirmation candle */}
-        <line x1={candleX + candleW / 2} y1={candleHigh} x2={candleX + candleW / 2} y2={candleLow}
-          stroke={accentColor} strokeWidth="1" />
-        <rect x={candleX} y={Math.min(candleOpen, candleClose)} width={candleW}
-          height={Math.max(2, Math.abs(candleOpen - candleClose))}
-          fill="none" stroke={accentColor} strokeWidth="1.5" />
+        {/* "Intraday pullback" — left area */}
+        <text x={xC(0.18)} y={H - padB + 16}
+          style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.textDim, fontStyle: "italic" }}>Intraday</text>
+        <text x={xC(0.18)} y={H - padB + 27}
+          style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.textDim, fontStyle: "italic" }}>pullback</text>
 
-        {/* Volume bars in bottom pad */}
-        {[confirmX - 5, confirmX, confirmX + 5].map((bx, i) => (
-          <rect key={i} x={bx - 2} y={padT + chartH + 6 - (i === 1 ? 14 : 9)} width={4} height={i === 1 ? 14 : 9}
-            fill={accentColor} opacity={i === 1 ? 0.9 : 0.55} />
-        ))}
-        <text x={confirmX} y={padT + chartH + 20} textAnchor="middle"
+        {/* "Waiting for signal" — under dots */}
+        <text x={(xC(0.50) + xC(0.68)) / 2} y={H - padB + 16} textAnchor="middle"
+          style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.muted }}>Waiting for signal</text>
+
+        {/* "Volume Confirmation" — under volume bars */}
+        <text x={candleCx} y={H - padB + 16} textAnchor="middle"
           style={{ fontSize: "7px", fontFamily: FONT_BODY, fill: C.muted }}>Volume</text>
-        <text x={confirmX} y={padT + chartH + 30} textAnchor="middle"
+        <text x={candleCx} y={H - padB + 27} textAnchor="middle"
           style={{ fontSize: "7px", fontFamily: FONT_BODY, fill: C.muted }}>Confirmation</text>
 
-        {/* 5-min candle close note — right margin column */}
-        <text x={W - padR + 4} y={Math.min(candleOpen, candleClose) - 2}
-          style={{ fontSize: "8.5px", fontFamily: FONT_BODY, fill: C.text, fontWeight: 700 }}>5-min candle close</text>
-        <text x={W - padR + 4} y={Math.min(candleOpen, candleClose) + 10}
-          style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.muted }}>above {fmtP(entryHigh)} + vol</text>
+        {/* ── RIGHT ANNOTATION COLUMN ── */}
+        {/* Confirmed entry */}
+        <text x={arrowEndX + 4} y={arrowEndY - 4}
+          style={{ fontSize: "8.5px", fontFamily: FONT_BODY, fill: accentColor, fontStyle: "italic", fontWeight: 600 }}>Confirmed entry</text>
 
-        {/* Confirmed entry arrow */}
-        <path d={`M ${confirmX + 8} ${confirmY - 6} C ${xAt(0.75)} ${confirmY - 18}, ${endX - 6} ${endY + 8}, ${endX} ${endY}`}
-          stroke={accentColor} strokeWidth="2.5" fill="none" strokeLinecap="round"
-          markerEnd="url(#arrowhead)" />
-        <defs>
-          <marker id="arrowhead" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L6,3 Z" fill={accentColor} />
-          </marker>
-        </defs>
-        {/* "Confirmed entry" label in right margin */}
-        <text x={W - padR + 4} y={endY - 4}
-          style={{ fontSize: "8px", fontFamily: FONT_BODY, fill: accentColor, fontStyle: "italic" }}>Confirmed entry</text>
+        {/* 5-min candle close note */}
+        <text x={rightX} y={yEntryHigh - 2}
+          style={{ fontSize: "8px", fontFamily: FONT_BODY, fill: C.text, fontWeight: 700 }}>5-min candle close</text>
+        <text x={rightX} y={yEntryHigh + 10}
+          style={{ fontSize: "7px", fontFamily: FONT_BODY, fill: C.muted }}>above {fmtP(entryHigh)} + expanding vol</text>
+
+        {/* Avoid zone label */}
+        <text x={rightX} y={isBuy ? padT + 11 : yAvoid + 13}
+          style={{ fontSize: "8px", fontFamily: FONT_BODY, fill: avoidLineColor, fontWeight: 700 }}>
+          {isBuy ? "Avoid chasing above" : "Avoid chasing below"} {fmtP(avoidPrice)}
+        </text>
+        <text x={rightX} y={isBuy ? padT + 22 : yAvoid + 24}
+          style={{ fontSize: "7px", fontFamily: FONT_BODY, fill: C.muted }}>
+          Already too {isBuy ? "high" : "low"} on momentum
+        </text>
+
+        {/* Entry zone label */}
+        <text x={rightX} y={(yEntryHigh + yEntryLow) / 2 + 2}
+          style={{ fontSize: "8px", fontFamily: FONT_BODY, fill: accentColor, fontWeight: 700 }}>
+          Entry: {fmtP(entryLow)}–{fmtP(entryHigh)}
+        </text>
+        <text x={rightX} y={(yEntryHigh + yEntryLow) / 2 + 13}
+          style={{ fontSize: "7px", fontFamily: FONT_BODY, fill: C.textDim }}>
+          {(signal.keyLevel || "Prior support zone").slice(0, 24)}
+        </text>
       </svg>
       <div style={{ padding: "6px 10px", borderTop: `1px solid ${C.border}`, fontSize: 9, color: C.textDim, lineHeight: 1.55 }}>
         {signal.entryNote}
