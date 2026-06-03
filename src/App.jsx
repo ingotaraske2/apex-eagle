@@ -238,7 +238,6 @@ async function callApi(apiKey, body, retries = 3, callLabel = "api") {
           "Content-Type": "application/json",
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
-          "anthropic-beta": "prompt-caching-1",
           "anthropic-dangerous-direct-browser-access": "true",
         },
         body: JSON.stringify(requestBody),
