@@ -196,9 +196,10 @@ function attachDiag(err, diag) {
 
 async function callApi(apiKey, body, retries = 3, callLabel = "api") {
   const {
-    model = "claude-sonnet-4-5-20250929",
+    model = "claude-sonnet-4-6",
     max_tokens = 4000,
     tools,
+    system,
     messages = [],
   } = body;
 
@@ -207,6 +208,7 @@ async function callApi(apiKey, body, retries = 3, callLabel = "api") {
     max_tokens,
     messages,
     ...(Array.isArray(tools) && tools.length ? { tools } : {}),
+    ...(system ? { system } : {}),
   };
 
   const hasSearchTool = Array.isArray(tools) && tools.some(t => t?.type?.startsWith("web_search") || t?.name === "web_search");
@@ -1587,23 +1589,31 @@ function ApexEagleApp({ user, apiKey, onLogout, onUpdateKey }) {
         setOutcomeStatus({ iteration: iter, passed: false, feedback: graderFeedback, goalMet: false, log: [...iterLog] });
         setLoaderStep(`🎯 Outcome loop — iteration ${iter}/${MAX_ITER}…`);
 
-        const agentPrompt = `You are APEX Eagle, elite intraday day trading analyst. Today is ${dateStr} at ${timeStr} UTC.
+        const agentSystem = [
+          {
+            type: "text",
+            text: `You are APEX Eagle, elite intraday day trading analyst.
+STOP LOSS RULES: TIGHT SLs based on nearest technical level — NOT a percentage guess.
+Caps: MSFT/GOOGL/META<=2.0%, NVDA/AMD/PLTR/SMCI<=2.5%, SOUN<=3.0%, XOM/CVX/BP/SLB<=1.8%, COP<=1.8%, OXY/FANG<=2.2%, Gold<=1.2%, Oil<=2.0%
+TP must be >=1.5x SL. stopLossNote MUST include a specific price. If no tight SL exists -> HOLD.
+SIGNAL ALIGNMENT: If institutional flow contradicts technical signal, lower confidence 15+ pts or set HOLD.
+Return ONLY valid JSON, no markdown:
+{"overallSentiment":<0-100>,"overallLabel":"<EXTREME FEAR|FEAR|NEUTRAL|GREED|EXTREME GREED>","signals":[{"asset":"<ticker>","assetFull":"<name>","currentPrice":<n>,"action":"<BUY|SELL|HOLD>","confidence":<0-100>,"suggestedLeverage":<1-5>,"entryNote":"<specific entry>","stopLossPct":<n>,"stopLossNote":"<exact price + reason>","takeProfitPct":<n>,"takeProfitNote":"<target>","bullish":<0-100>,"keyLevel":"<price>","rsi":<0-100>,"trend":"<UPTREND|DOWNTREND|SIDEWAYS>","patterns":"<pattern>","volume":"<ABOVE_AVG|BELOW_AVG|AVERAGE>","reasoning":"<2-3 sentences>"}]}`,
+            cache_control: { type: "ephemeral" },
+          },
+        ];
+        const agentUserMsg = `Today is ${dateStr} at ${timeStr} UTC.
 Assets: ${selectedAssets.join(", ")}
 Portfolio: $${budget.toLocaleString()} | Risk: ${riskPct}% per trade | Max leverage: ${leverage}x
 GOAL: Find at least one strong BUY or SELL opportunity with confidence >= 65%.
 ${graderFeedback ? `GRADER FEEDBACK — fix these issues:\n${graderFeedback}\n` : ""}
-Search current prices, recent price action, dark pool, options flow, institutional signals.
-SIGNAL ALIGNMENT: If institutional flow contradicts technical signal, lower confidence 15+ pts or set HOLD.
-STOP LOSS RULES: TIGHT SLs based on nearest technical level — NOT a percentage guess.
-Caps: MSFT/GOOGL/META<=2.0%, NVDA/AMD/PLTR/SMCI<=2.5%, SOUN<=3.0%, XOM/CVX/BP/SLB<=1.8%, COP<=1.8%, OXY/FANG<=2.2%, Gold<=1.2%, Oil<=2.0%
-TP must be >=1.5x SL. stopLossNote MUST include a specific price. If no tight SL exists -> HOLD. Reduce leverage on volatile days.
-Return ONLY valid JSON, no markdown:
-{"overallSentiment":<0-100>,"overallLabel":"<EXTREME FEAR|FEAR|NEUTRAL|GREED|EXTREME GREED>","signals":[{"asset":"<ticker>","assetFull":"<name>","currentPrice":<n>,"action":"<BUY|SELL|HOLD>","confidence":<0-100>,"suggestedLeverage":<1-${leverage}>,"entryNote":"<specific entry e.g. breakout above $X>","stopLossPct":<n>,"stopLossNote":"<exact price + reason>","takeProfitPct":<n>,"takeProfitNote":"<target>","bullish":<0-100>,"keyLevel":"<price>","rsi":<0-100>,"trend":"<UPTREND|DOWNTREND|SIDEWAYS>","patterns":"<pattern>","volume":"<ABOVE_AVG|BELOW_AVG|AVERAGE>","reasoning":"<2-3 sentences>"}]}`;
+Search current prices and recent price action only. Limit to 3 searches maximum.`;
 
         const agentData = await callApi(apiKey, {
-          max_tokens: 4000,
+          max_tokens: 2000,
           tools: [{ type: "web_search_20250305", name: "web_search" }],
-          messages: [{ role: "user", content: agentPrompt }],
+          system: agentSystem,
+          messages: [{ role: "user", content: agentUserMsg }],
         }, 3, `agent-iter-${iter}`);
         const agentText = agentData.content.filter(b => b.type === "text").map(b => b.text).join("");
         const result = safeParseJson(agentText);
@@ -1616,21 +1626,20 @@ Return ONLY valid JSON, no markdown:
         const normalized = normalizeSignals(result.signals, leverage);
 
         setLoaderStep(`🔍 Grader evaluating iteration ${iter}…`);
-        const graderPrompt = `You are the APEX Eagle Outcome Grader running on Claude Haiku 4.5. You did NOT produce this output. Evaluate it independently.
-
-## RUBRIC
+        const graderSystem = [
+          {
+            type: "text",
+            text: `You are the APEX Eagle Outcome Grader. You did NOT produce the agent output. Evaluate it independently.
 ${OUTCOME_RUBRIC}
-
-## AGENT OUTPUT
-${JSON.stringify(normalized.map(s => ({ asset: s.asset, action: s.action, confidence: s.confidence, stopLossPct: s.stopLossPct, stopLossNote: s.stopLossNote, takeProfitPct: s.takeProfitPct, entryNote: s.entryNote, currentPrice: s.currentPrice })))}
-
-Return ONLY valid JSON:
-{"passed":<true if ALL 6 criteria pass>,"goalMet":<true if C1+C2 both pass>,"criteria":{"C1":{"pass":<bool>,"note":"<brief>"},"C2":{"pass":<bool>,"note":"<brief>"},"C3":{"pass":<bool>,"note":"<brief>"},"C4":{"pass":<bool>,"note":"<brief>"},"C5":{"pass":<bool>,"note":"<brief>"},"C6":{"pass":<bool>,"note":"<brief>"}},"feedback":"<if failed: precise instructions. If passed: All criteria met.>"}`;
-
+Return ONLY valid JSON: {"passed":<true if ALL 6 criteria pass>,"goalMet":<true if C1+C2 both pass>,"criteria":{"C1":{"pass":<bool>,"note":"<brief>"},"C2":{"pass":<bool>,"note":"<brief>"},"C3":{"pass":<bool>,"note":"<brief>"},"C4":{"pass":<bool>,"note":"<brief>"},"C5":{"pass":<bool>,"note":"<brief>"},"C6":{"pass":<bool>,"note":"<brief>"}},"feedback":"<if failed: precise instructions. If passed: All criteria met.>"}`,
+            cache_control: { type: "ephemeral" },
+          },
+        ];
         const graderData = await callApi(apiKey, {
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 800,
-          messages: [{ role: "user", content: graderPrompt }],
+          max_tokens: 600,
+          system: graderSystem,
+          messages: [{ role: "user", content: JSON.stringify(normalized.map(s => ({ asset: s.asset, action: s.action, confidence: s.confidence, stopLossPct: s.stopLossPct, stopLossNote: s.stopLossNote, takeProfitPct: s.takeProfitPct, entryNote: s.entryNote, currentPrice: s.currentPrice }))) }],
         }, 3, `grader-iter-${iter}`);
         const graderResult = safeParseJson(graderData.content.filter(b => b.type === "text").map(b => b.text).join(""));
         const entry = {
@@ -1665,26 +1674,43 @@ Return ONLY valid JSON:
         setRiskSummary({ totalMargin: active.reduce((sum, s) => sum + calcPositionSize(budget, riskPct, s.stopLossPct, s.suggestedLeverage).margin, 0), totalRisk: active.length * (budget * riskPct / 100), activeCount: active.length, total: fb.length });
       }
 
-      // Enrichment
+      // Enrichment — only active (BUY/SELL) signals, two focused searches per asset
       setLoaderStep("Scanning institutional flow & dark pool…");
-      const currentSigs = (lastResult?.signals || []).map(s => ({ ...s, currentPrice: Number(s.currentPrice) || 100, trend: s.trend || "SIDEWAYS" }));
+      const currentSigs = (lastResult?.signals || [])
+        .filter(s => s.action !== "HOLD")
+        .map(s => ({ ...s, currentPrice: Number(s.currentPrice) || 100, trend: s.trend || "SIDEWAYS" }));
       if (currentSigs.length) {
         try {
-          const assetList = currentSigs.map(s => `${s.asset} ($${s.currentPrice}, ${s.trend})`).join(", ");
-          const enrichPrompt = `You are APEX Eagle. Search the web for each asset: ${assetList}.
-For EACH asset: 1. News from last 4 hours only. 2. Institutional flow: dark pool prints (unusualwhales.com), options put/call ratio, unusual block trades, SEC insider filings, ETF flows (QQQ, XLK, XLE).
-Return ONLY valid JSON:
-{"assets":{"<TICKER>":{"sentimentSummary":{"headline":"<1 sentence>","bullPoints":["<b1>","<b2>","<b3>"],"bearPoints":["<r1>","<r2>","<r3>"],"catalysts":["<c1>","<c2>"],"analystConsensus":"<short>","newsFlow":"<POSITIVE|NEGATIVE|MIXED|NEUTRAL|NO_RECENT_DATA>","socialSentiment":"<VERY_BULLISH|BULLISH|NEUTRAL|BEARISH|VERY_BEARISH>"},"institutionalFlow":{"overallBias":"<ACCUMULATING|DISTRIBUTING|NEUTRAL>","darkPool":{"signal":"<BULLISH|BEARISH|NEUTRAL|NO_DATA>","detail":"<detail>","recentPrints":["<p1>","<p2>"]},"optionsFlow":{"putCallRatio":"<n or N/A>","signal":"<BULLISH|BEARISH|NEUTRAL>","unusualActivity":"<detail>"},"insiderActivity":{"signal":"<BUYING|SELLING|NEUTRAL|NO_RECENT>","detail":"<detail>"},"etfFlow":{"signal":"<INFLOW|OUTFLOW|NEUTRAL>","detail":"<detail>"},"institutionalOwnership":"<detail>","13fChange":"<detail>","flowScore":<0-100>},"ohlcv":[{"o":<n>,"h":<n>,"l":<n>,"c":<n>,"v":<0-100>}]}}}
-ohlcv: exactly 20 candles ending near current price. Never fabricate specific dollar amounts.`;
-          const enriched = safeParseJson(
-            (await callApi(apiKey, { max_tokens: 6000, tools: [{ type: "web_search_20250305", name: "web_search" }], messages: [{ role: "user", content: enrichPrompt }] }, 3, "enrichment"))
-              .content.filter(b => b.type === "text").map(b => b.text).join("")
-          );
+          const enrichSystem = [
+            {
+              type: "text",
+              text: `You are APEX Eagle. Return ONLY valid JSON, no markdown. Never fabricate specific dollar amounts.`,
+              cache_control: { type: "ephemeral" },
+            },
+          ];
+          const enrichedByAsset = {};
+          await Promise.all(currentSigs.map(async sig => {
+            const newsPrompt = `Search news for ${sig.asset} ($${sig.currentPrice}) from the last 4 hours only.
+Return ONLY valid JSON: {"sentimentSummary":{"headline":"<1 sentence>","bullPoints":["<b1>","<b2>"],"bearPoints":["<r1>","<r2>"],"catalysts":["<c1>"],"analystConsensus":"<short>","newsFlow":"<POSITIVE|NEGATIVE|MIXED|NEUTRAL|NO_RECENT_DATA>","socialSentiment":"<VERY_BULLISH|BULLISH|NEUTRAL|BEARISH|VERY_BEARISH>"},"ohlcv":[{"o":<n>,"h":<n>,"l":<n>,"c":<n>,"v":<0-100>}]}
+ohlcv: exactly 20 candles ending near $${sig.currentPrice}.`;
+            const flowPrompt = `Search institutional flow for ${sig.asset}: dark pool prints, options put/call ratio, unusual blocks, ETF flows.
+Return ONLY valid JSON: {"institutionalFlow":{"overallBias":"<ACCUMULATING|DISTRIBUTING|NEUTRAL>","darkPool":{"signal":"<BULLISH|BEARISH|NEUTRAL|NO_DATA>","detail":"<detail>","recentPrints":["<p1>"]},"optionsFlow":{"putCallRatio":"<n or N/A>","signal":"<BULLISH|BEARISH|NEUTRAL>","unusualActivity":"<detail>"},"insiderActivity":{"signal":"<BUYING|SELLING|NEUTRAL|NO_RECENT>","detail":"<detail>"},"etfFlow":{"signal":"<INFLOW|OUTFLOW|NEUTRAL>","detail":"<detail>"},"institutionalOwnership":"<short>","13fChange":"<short>","flowScore":<0-100>}}`;
+
+            const [newsData, flowData] = await Promise.all([
+              callApi(apiKey, { model: "claude-haiku-4-5-20251001", max_tokens: 1200, tools: [{ type: "web_search_20250305", name: "web_search" }], system: enrichSystem, messages: [{ role: "user", content: newsPrompt }] }, 2, `enrich-news-${sig.asset}`),
+              callApi(apiKey, { model: "claude-haiku-4-5-20251001", max_tokens: 800, tools: [{ type: "web_search_20250305", name: "web_search" }], system: enrichSystem, messages: [{ role: "user", content: flowPrompt }] }, 2, `enrich-flow-${sig.asset}`),
+            ]);
+            const news = safeParseJson(newsData.content.filter(b => b.type === "text").map(b => b.text).join(""));
+            const flow = safeParseJson(flowData.content.filter(b => b.type === "text").map(b => b.text).join(""));
+            enrichedByAsset[sig.asset] = { sentimentSummary: news?.sentimentSummary || null, ohlcv: news?.ohlcv || null, institutionalFlow: flow?.institutionalFlow || null };
+          }));
+
           setSignals(prev => prev.map(s => {
-            const e = enriched?.assets?.[s.asset];
-            const rawOhlcv = Array.isArray(e?.ohlcv) ? e.ohlcv.filter(c => c && typeof c.o === "number") : [];
+            const e = enrichedByAsset[s.asset];
+            if (!e) return { ...s, ohlcv: s.ohlcv || generateFallbackOHLCV(s.currentPrice, s.trend, 20) };
+            const rawOhlcv = Array.isArray(e.ohlcv) ? e.ohlcv.filter(c => c && typeof c.o === "number") : [];
             const ohlcv = rawOhlcv.length >= 3 ? rawOhlcv : generateFallbackOHLCV(s.currentPrice, s.trend, 20);
-            const flow = e?.institutionalFlow || null;
+            const flow = e.institutionalFlow || null;
             let conf = s.confidence;
             if (flow) {
               const al = (s.action === "BUY" && flow.overallBias === "ACCUMULATING") || (s.action === "SELL" && flow.overallBias === "DISTRIBUTING");
@@ -1696,7 +1722,7 @@ ohlcv: exactly 20 candles ending near current price. Never fabricate specific do
               if (flow.optionsFlow?.signal === "BULLISH" && s.action === "BUY") conf = Math.min(99, conf + 4);
               if (flow.optionsFlow?.signal === "BEARISH" && s.action === "BUY") conf = Math.max(10, conf - 4);
             }
-            return { ...s, confidence: conf, sentimentSummary: e?.sentimentSummary || null, institutionalFlow: flow, ohlcv };
+            return { ...s, confidence: conf, sentimentSummary: e.sentimentSummary || null, institutionalFlow: flow, ohlcv };
           }));
         } catch {
           setSignals(prev => prev.map(s => ({ ...s, ohlcv: s.ohlcv || generateFallbackOHLCV(s.currentPrice, s.trend, 20) })));
