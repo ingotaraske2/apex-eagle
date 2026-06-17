@@ -454,8 +454,8 @@ async function sendEmail(env, subject, html) {
 
 // ── KEEP-ALIVE PINGS ──────────────────────────────────────────────────────────
 const PING_URLS = [
-  "https://bjj-comp-saas.onrender.com/health",
-  "https://bjj-comp-saas-ui.onrender.com/health",
+  "https://yunit-frontend.onrender.com/health",
+  "https://yunit-tech-website.onrender.com/health",
 ];
 
 async function pingServices() {
