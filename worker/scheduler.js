@@ -456,6 +456,8 @@ async function sendEmail(env, subject, html) {
 const PING_URLS = [
   "https://yunit-frontend.onrender.com/health",
   "https://yunit-tech-website.onrender.com/health",
+  "https://bjj-comp-saas-ui.onrender.com/health",
+  "https://bjj-comp-saas.onrender.com/health"
 ];
 
 async function pingServices() {
