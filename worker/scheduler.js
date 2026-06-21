@@ -457,7 +457,9 @@ const PING_URLS = [
   "https://yunit-frontend.onrender.com/health",
   "https://yunit-tech-website.onrender.com/health",
   "https://bjj-comp-saas-ui.onrender.com/health",
-  "https://bjj-comp-saas.onrender.com/health"
+  "https://bjj-comp-saas.onrender.com/health",
+  "https://bjj-app-qa.onrender.com/",
+  "https://bjj-api-qa.onrender.com"
 ];
 
 async function pingServices() {
