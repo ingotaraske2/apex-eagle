@@ -465,7 +465,7 @@ const PING_URLS = [
 async function pingServices() {
   await Promise.all(
     PING_URLS.map(url =>
-      fetch(url, { signal: AbortSignal.timeout(10000) })
+      fetch(url, { signal: AbortSignal.timeout(100000) })
         .then(r => console.log(`[ping] ${url} → ${r.status}`))
         .catch(err => console.warn(`[ping] ${url} failed: ${err.message}`))
     )
