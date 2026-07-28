@@ -48,10 +48,17 @@ Before deploying, set these in Cloudflare Pages → your project → **Settings 
 
 | Variable | Value | Required |
 |---|---|---|
-| `VITE_GOOGLE_CLIENT_ID` | Your Google OAuth Client ID | Yes |
+| `VITE_FIREBASE_API_KEY` | Firebase web API key (`AIza...`) | Yes |
+| `VITE_FIREBASE_AUTH_DOMAIN` | `<project-id>.firebaseapp.com` | Yes |
+| `VITE_FIREBASE_PROJECT_ID` | Firebase project id | Yes |
+| `VITE_FIREBASE_APP_ID` | Firebase web app id | Yes |
 | `VITE_SPECIAL_USER_KEY` | Anthropic key for ingo.taraske@gmail.com (skips BYOK prompt) | Optional |
 
 Both are injected at **build time** by Vite. They are embedded in the compiled JS bundle — do not put secrets you want completely hidden here. The special user key is only a convenience; if you prefer, leave `VITE_SPECIAL_USER_KEY` blank and ingo.taraske@gmail.com will be prompted for a key like everyone else.
+
+### 3.2.1 Authorize the Pages domain in Firebase
+
+Firebase also has a separate sign-in domain allowlist. For production, go to Firebase Console → **Authentication** → **Settings** → **Authorized domains** and add `eagle.yunit.tech`. Add any Pages preview hostname you use too. Without this, Google sign-in fails with `auth/unauthorized-domain`.
 
 ### 3.3 Connect your GitHub repo to Cloudflare Pages
 
@@ -132,7 +139,7 @@ Set these under **Settings → Variables and Secrets → Environment Variables**
 
 The web app uses a "bring your own key" pattern — your Anthropic key is stored only in your browser's `localStorage` and never sent to any server other than Anthropic directly.
 
-1. Open your Pages URL (e.g. `apex-eagle.pages.dev`)
+1. Open `https://eagle.yunit.tech/`
 2. On first load, the app will prompt for your Anthropic API key
 3. Paste your key (`sk-ant-api03-…`) and confirm
 4. The key is saved in localStorage — you only need to do this once per browser
@@ -174,7 +181,7 @@ GitHub repo (apex-eagle)
     │
     ├── Push to main
     │       ↓
-    │   Cloudflare Pages ──── auto-build React app ──── apex-eagle.pages.dev
+    │   Cloudflare Pages ──── auto-build React app ──── eagle.yunit.tech
     │
     └── Cloudflare Worker ─── auto-redeploy scheduler.js
             │
@@ -214,6 +221,7 @@ GitHub repo (apex-eagle)
 | Worker not triggering on schedule | Check cron syntax in **Settings → Triggers**. Crons run in UTC |
 | No email sent | Worker only emails when BUY signals with conf ≥ 65% exist. Check Worker logs for "No qualifying BUY signals" |
 | Email in spam | Mark as "not spam". Consider adding a custom domain in Resend |
+| `auth/unauthorized-domain` during Google sign-in | Add the current browser hostname in Firebase Console → **Authentication** → **Settings** → **Authorized domains**, then retry |
 | `anthropic-dangerous-direct-browser-access` error | Ensure the web app is calling the Anthropic API with this header — it is included in App.jsx by default |
 | CORS error in web app | This header is required and already set in the app. If you see this, the key may be invalid |
 | Worker error emails | The Worker sends itself an error email if it crashes — check your inbox for the subject "APEX Eagle ⚠ Scheduler Error" |

@@ -1,6 +1,6 @@
 # APEX Eagle — Deployment
 
-Condensed quick-start. For the full walkthrough (Firebase project setup, Resend signup, custom domains), see [docs/CONFIGURATION.md](docs/CONFIGURATION.md). The older guide still mentions Anthropic and `VITE_GOOGLE_CLIENT_ID` — this file supersedes it for env vars and secrets.
+Condensed quick-start. For the full walkthrough (Firebase project setup, Resend signup, custom domains), see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ---
 
@@ -19,7 +19,7 @@ Condensed quick-start. For the full walkthrough (Firebase project setup, Resend 
 1. Go to [console.firebase.google.com](https://console.firebase.google.com) → **Add project**.
 2. After the project is created → **Project settings** (gear icon) → **Your apps** → click the **`</>` Web** icon → register the app. Copy the `apiKey`, `authDomain`, `projectId`, and `appId` values.
 3. **Authentication** → **Sign-in method** → enable **Google**.
-4. **Authentication** → **Settings** → **Authorized domains** → add your Pages domain (e.g. `apex-eagle.pages.dev`) once it exists.
+4. **Authentication** → **Settings** → **Authorized domains** → add `eagle.yunit.tech` and any Pages preview hostname you use.
 
 No Google Cloud Console or OAuth client ID setup is required — Firebase handles it.
 
@@ -44,7 +44,7 @@ No Google Cloud Console or OAuth client ID setup is required — Firebase handle
 
    Every push to `main` triggers a rebuild.
 
-> No `VITE_GOOGLE_CLIENT_ID` is needed. Older docs mention it — that was a mistake; the app uses Firebase Auth, not Google Identity Services directly.
+> No `VITE_GOOGLE_CLIENT_ID` is needed; the app uses Firebase Auth, not Google Identity Services directly.
 
 ---
 
@@ -79,7 +79,7 @@ No Google Cloud Console or OAuth client ID setup is required — Firebase handle
 
 - **Default URL:** `https://<your-pages-project>.pages.dev/` (Cloudflare assigns this when the Pages project is created — visible in the Pages dashboard).
 - **Path:** the entire app is served at the root path `/`. It's a single-page React app — Signals / Settings / Portfolio are in-app tabs (React state), not separate URL routes. There are no other paths on the Pages domain.
-- **Custom domain (optional):** Pages project → **Custom domains** → **Set up a custom domain** → follow the DNS instructions. HTTPS is provisioned automatically.
+- **Custom domain:** production is served at `https://eagle.yunit.tech/`. Pages project → **Custom domains** manages the DNS binding. HTTPS is provisioned automatically.
 - **Authorized domains:** every domain you serve from must be added in Firebase → **Authentication → Settings → Authorized domains**, otherwise Google sign-in will fail with `auth/unauthorized-domain`.
 
 > The only non-root path in the deployment is `GET /trigger` on the **Worker** subdomain (`*.workers.dev`) — see [Manual trigger](#manual-trigger). It is not on the Pages site.
@@ -166,6 +166,7 @@ The Anthropic API key doubles as the manual-trigger auth token.
 |---|---|
 | Build fails on Cloudflare Pages | Check build logs; verify `package.json` is in repo root |
 | "Firebase is not configured" on login screen | Recheck the four `VITE_FIREBASE_*` env vars and redeploy |
+| `auth/unauthorized-domain` during Google sign-in | Add the current browser hostname in Firebase → **Authentication** → **Settings** → **Authorized domains**, then retry |
 | "Invalid API key" when saving Anthropic key | Key must start with `sk-ant-`. Verify it works at [console.anthropic.com](https://console.anthropic.com) → API Keys |
 | Worker not firing on cron | Verify cron expressions in **Settings → Triggers**; crons run in UTC |
 | No email arrives | The Worker only emails when at least one BUY signal has confidence ≥65%. Check the Worker's **Logs** tab |
@@ -180,7 +181,7 @@ The Anthropic API key doubles as the manual-trigger auth token.
 GitHub repo
    ├── Push to main
    │       ↓
-   │   Cloudflare Pages ── auto-build React app ── apex-eagle.pages.dev
+   │   Cloudflare Pages ── auto-build React app ── eagle.yunit.tech
    │
    └── Cloudflare Worker ── auto-redeploy scheduler.js
            ├── Cron: Mon 06:00 UTC

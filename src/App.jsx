@@ -11,6 +11,10 @@ const FIREBASE_CONFIG = {
   appId:      import.meta.env.VITE_FIREBASE_APP_ID      || "YOUR_APP_ID",
 };
 
+function getCurrentHostname() {
+  return typeof window === "undefined" ? "this domain" : window.location.hostname;
+}
+
 // ── CONSTANTS ─────────────────────────────────────────────────────────────────
 const DEFAULT_CATEGORIES = [
   { id: "ai", name: "AI", tickers: ["NVDA", "MSFT", "GOOGL", "META", "AMD", "PLTR", "SMCI", "SOUN"] },
@@ -372,7 +376,10 @@ function LoginScreen({ onSignIn }) {
       if (err.code === "auth/popup-closed-by-user" || err.code === "auth/cancelled-popup-request") {
         setAuthError(null); // silent
       } else if (err.code === "auth/configuration-not-found" || !FIREBASE_CONFIG.apiKey.startsWith("AIza")) {
-        setAuthError("Firebase is not configured yet. Replace FIREBASE_CONFIG in App.jsx with your project values.");
+        setAuthError("Firebase is not configured yet. Set the four VITE_FIREBASE_* environment variables and redeploy.");
+      } else if (err.code === "auth/unauthorized-domain") {
+        const hostname = getCurrentHostname();
+        setAuthError(`Firebase rejected this domain. Add "${hostname}" in Firebase Console > Authentication > Settings > Authorized domains, then retry Google sign-in.`);
       } else {
         setAuthError(err.message || "Sign-in failed. Please try again.");
       }
@@ -818,6 +825,7 @@ function TradingChart({ signal }) {
 
 // ── ENTRY DIAGRAM ─────────────────────────────────────────────────────────────
 function EntryDiagram({ signal }) {
+  const [raisedPart, setRaisedPart] = useState(null);
   const action = signal.action;
   if (action === "HOLD") return null;
 
@@ -898,6 +906,142 @@ function EntryDiagram({ signal }) {
     { x: candleCx + 8, h: 9 },
   ];
 
+  const raiseableProps = part => ({
+    role: "button",
+    tabIndex: 0,
+    onClick: e => {
+      e.stopPropagation();
+      setRaisedPart(part);
+    },
+    onKeyDown: e => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        setRaisedPart(part);
+      }
+    },
+    style: { cursor: "pointer", pointerEvents: "all" },
+  });
+
+  const raisedTextStyle = (part, style) => ({
+    ...style,
+    ...(raisedPart === part ? {
+      paintOrder: "stroke",
+      stroke: "#080c12",
+      strokeWidth: 2.6,
+      strokeLinejoin: "round",
+    } : {}),
+  });
+
+  const overlayParts = [
+    {
+      id: "prior",
+      element: (
+        <g key="prior" {...raiseableProps("prior")}>
+          <title>Click to raise prior consolidation label</title>
+          <line x1={padL + 4} x2={xC(0.40)} y1={H - padB + 4} y2={H - padB + 4}
+            stroke="rgba(255,92,124,0.45)" strokeWidth="1" />
+          <text x={(padL + 4 + xC(0.40)) / 2} y={H - padB + 16} textAnchor="middle"
+            style={raisedTextStyle("prior", { fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.muted })}>Prior consolidation</text>
+          <text x={(padL + 4 + xC(0.40)) / 2} y={H - padB + 27} textAnchor="middle"
+            style={raisedTextStyle("prior", { fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.muted })}>base (support zone)</text>
+        </g>
+      ),
+    },
+    {
+      id: "pullback-label",
+      element: (
+        <g key="pullback-label" {...raiseableProps("pullback-label")}>
+          <title>Click to raise intraday pullback label</title>
+          <text x={xC(0.18)} y={H - padB + 16}
+            style={raisedTextStyle("pullback-label", { fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.textDim, fontStyle: "italic" })}>Intraday</text>
+          <text x={xC(0.18)} y={H - padB + 27}
+            style={raisedTextStyle("pullback-label", { fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.textDim, fontStyle: "italic" })}>pullback</text>
+        </g>
+      ),
+    },
+    {
+      id: "waiting-label",
+      element: (
+        <g key="waiting-label" {...raiseableProps("waiting-label")}>
+          <title>Click to raise waiting label</title>
+          <text x={(xC(0.50) + xC(0.68)) / 2} y={H - padB + 16} textAnchor="middle"
+            style={raisedTextStyle("waiting-label", { fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.muted })}>Waiting for signal</text>
+        </g>
+      ),
+    },
+    {
+      id: "volume-label",
+      element: (
+        <g key="volume-label" {...raiseableProps("volume-label")}>
+          <title>Click to raise volume confirmation label</title>
+          <text x={candleCx} y={H - padB + 16} textAnchor="middle"
+            style={raisedTextStyle("volume-label", { fontSize: "7px", fontFamily: FONT_BODY, fill: C.muted })}>Volume</text>
+          <text x={candleCx} y={H - padB + 27} textAnchor="middle"
+            style={raisedTextStyle("volume-label", { fontSize: "7px", fontFamily: FONT_BODY, fill: C.muted })}>Confirmation</text>
+        </g>
+      ),
+    },
+    {
+      id: "confirmed-entry",
+      element: (
+        <g key="confirmed-entry" {...raiseableProps("confirmed-entry")}>
+          <title>Click to raise confirmed entry label</title>
+          <text x={arrowEndX + 4} y={arrowEndY - 4}
+            style={raisedTextStyle("confirmed-entry", { fontSize: "8.5px", fontFamily: FONT_BODY, fill: accentColor, fontStyle: "italic", fontWeight: 600 })}>Confirmed entry</text>
+        </g>
+      ),
+    },
+    {
+      id: "candle-close",
+      element: (
+        <g key="candle-close" {...raiseableProps("candle-close")}>
+          <title>Click to raise candle close note</title>
+          <text x={rightX} y={yEntryHigh - 2}
+            style={raisedTextStyle("candle-close", { fontSize: "8px", fontFamily: FONT_BODY, fill: C.text, fontWeight: 700 })}>5-min candle close</text>
+          <text x={rightX} y={yEntryHigh + 10}
+            style={raisedTextStyle("candle-close", { fontSize: "7px", fontFamily: FONT_BODY, fill: C.muted })}>above {fmtP(entryHigh)} + expanding vol</text>
+        </g>
+      ),
+    },
+    {
+      id: "avoid-label",
+      element: (
+        <g key="avoid-label" {...raiseableProps("avoid-label")}>
+          <title>Click to raise avoid-zone label</title>
+          <text x={rightX} y={isBuy ? padT + 11 : yAvoid + 13}
+            style={raisedTextStyle("avoid-label", { fontSize: "8px", fontFamily: FONT_BODY, fill: avoidLineColor, fontWeight: 700 })}>
+            {isBuy ? "Avoid chasing above" : "Avoid chasing below"} {fmtP(avoidPrice)}
+          </text>
+          <text x={rightX} y={isBuy ? padT + 22 : yAvoid + 24}
+            style={raisedTextStyle("avoid-label", { fontSize: "7px", fontFamily: FONT_BODY, fill: C.muted })}>
+            Already too {isBuy ? "high" : "low"} on momentum
+          </text>
+        </g>
+      ),
+    },
+    {
+      id: "entry-label",
+      element: (
+        <g key="entry-label" {...raiseableProps("entry-label")}>
+          <title>Click to raise entry-zone label</title>
+          <text x={rightX} y={(yEntryHigh + yEntryLow) / 2 + 2}
+            style={raisedTextStyle("entry-label", { fontSize: "8px", fontFamily: FONT_BODY, fill: accentColor, fontWeight: 700 })}>
+            Entry: {fmtP(entryLow)}–{fmtP(entryHigh)}
+          </text>
+          <text x={rightX} y={(yEntryHigh + yEntryLow) / 2 + 13}
+            style={raisedTextStyle("entry-label", { fontSize: "7px", fontFamily: FONT_BODY, fill: C.textDim })}>
+            {(signal.keyLevel || "Prior support zone").slice(0, 24)}
+          </text>
+        </g>
+      ),
+    },
+  ];
+
+  const orderedOverlayParts = [
+    ...overlayParts.filter(part => part.id !== raisedPart),
+    ...overlayParts.filter(part => part.id === raisedPart),
+  ];
+
   return (
     <div style={{ background: "#080c12", border: `1px solid ${C.border}`, borderRadius: 4, overflow: "hidden", marginTop: 10 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", borderBottom: `1px solid ${C.border}`, background: "rgba(0,0,0,0.3)" }}>
@@ -968,66 +1112,120 @@ function EntryDiagram({ signal }) {
             fill={accentColor} opacity={i === 1 ? 0.95 : 0.5} />
         ))}
 
-        {/* ── BOTTOM LABELS (padB area, no overlap with chart) ── */}
-        {/* "Prior consolidation" — left of dots */}
-        <line x1={padL + 4} x2={xC(0.40)} y1={H - padB + 4} y2={H - padB + 4}
-          stroke="rgba(255,92,124,0.45)" strokeWidth="1" />
-        <text x={(padL + 4 + xC(0.40)) / 2} y={H - padB + 16} textAnchor="middle"
-          style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.muted }}>Prior consolidation</text>
-        <text x={(padL + 4 + xC(0.40)) / 2} y={H - padB + 27} textAnchor="middle"
-          style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.muted }}>base (support zone)</text>
-
-        {/* "Intraday pullback" — left area */}
-        <text x={xC(0.18)} y={H - padB + 16}
-          style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.textDim, fontStyle: "italic" }}>Intraday</text>
-        <text x={xC(0.18)} y={H - padB + 27}
-          style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.textDim, fontStyle: "italic" }}>pullback</text>
-
-        {/* "Waiting for signal" — under dots */}
-        <text x={(xC(0.50) + xC(0.68)) / 2} y={H - padB + 16} textAnchor="middle"
-          style={{ fontSize: "7.5px", fontFamily: FONT_BODY, fill: C.muted }}>Waiting for signal</text>
-
-        {/* "Volume Confirmation" — under volume bars */}
-        <text x={candleCx} y={H - padB + 16} textAnchor="middle"
-          style={{ fontSize: "7px", fontFamily: FONT_BODY, fill: C.muted }}>Volume</text>
-        <text x={candleCx} y={H - padB + 27} textAnchor="middle"
-          style={{ fontSize: "7px", fontFamily: FONT_BODY, fill: C.muted }}>Confirmation</text>
-
-        {/* ── RIGHT ANNOTATION COLUMN ── */}
-        {/* Confirmed entry */}
-        <text x={arrowEndX + 4} y={arrowEndY - 4}
-          style={{ fontSize: "8.5px", fontFamily: FONT_BODY, fill: accentColor, fontStyle: "italic", fontWeight: 600 }}>Confirmed entry</text>
-
-        {/* 5-min candle close note */}
-        <text x={rightX} y={yEntryHigh - 2}
-          style={{ fontSize: "8px", fontFamily: FONT_BODY, fill: C.text, fontWeight: 700 }}>5-min candle close</text>
-        <text x={rightX} y={yEntryHigh + 10}
-          style={{ fontSize: "7px", fontFamily: FONT_BODY, fill: C.muted }}>above {fmtP(entryHigh)} + expanding vol</text>
-
-        {/* Avoid zone label */}
-        <text x={rightX} y={isBuy ? padT + 11 : yAvoid + 13}
-          style={{ fontSize: "8px", fontFamily: FONT_BODY, fill: avoidLineColor, fontWeight: 700 }}>
-          {isBuy ? "Avoid chasing above" : "Avoid chasing below"} {fmtP(avoidPrice)}
-        </text>
-        <text x={rightX} y={isBuy ? padT + 22 : yAvoid + 24}
-          style={{ fontSize: "7px", fontFamily: FONT_BODY, fill: C.muted }}>
-          Already too {isBuy ? "high" : "low"} on momentum
-        </text>
-
-        {/* Entry zone label */}
-        <text x={rightX} y={(yEntryHigh + yEntryLow) / 2 + 2}
-          style={{ fontSize: "8px", fontFamily: FONT_BODY, fill: accentColor, fontWeight: 700 }}>
-          Entry: {fmtP(entryLow)}–{fmtP(entryHigh)}
-        </text>
-        <text x={rightX} y={(yEntryHigh + yEntryLow) / 2 + 13}
-          style={{ fontSize: "7px", fontFamily: FONT_BODY, fill: C.textDim }}>
-          {(signal.keyLevel || "Prior support zone").slice(0, 24)}
-        </text>
+        {/* ── CLICKABLE OVERLAY LABELS ── */}
+        {orderedOverlayParts.map(part => part.element)}
       </svg>
       <div style={{ padding: "6px 10px", borderTop: `1px solid ${C.border}`, fontSize: 9, color: C.textDim, lineHeight: 1.55 }}>
         {signal.entryNote}
       </div>
     </div>
+  );
+}
+
+// ── METRIC HELP ────────────────────────────────────────────────────────────────
+const METRIC_HELP = {
+  confidence: {
+    title: "Confidence",
+    body: [
+      "What it means: conviction in this specific BUY/SELL setup, not a guaranteed win probability.",
+      "How it is calculated: the initial model score considers live price context, trend, RSI, volume, chart pattern, entry quality, stop-loss discipline, take-profit room, and recent sentiment/news.",
+      "Institutional flow then adjusts it: aligned overall flow adds up to 8 points, opposing flow subtracts up to 12, and BUY setups can receive smaller dark-pool/options adjustments.",
+      "Rule of thumb: 65+ is actionable, 80+ is strong, below 65 usually needs a better entry or cleaner confirmation.",
+    ],
+  },
+  flowScore: {
+    title: "Flow Score",
+    body: [
+      "What it means: strength and clarity of institutional participation behind the reported flow bias.",
+      "How it is calculated: the enrichment pass searches dark-pool prints, options put/call and unusual blocks, insider activity, ETF flow, institutional ownership, and recent 13F changes, then scores the evidence from 0-100.",
+      "Read it with the bias label: high score plus ACCUMULATING supports long setups; high score plus DISTRIBUTING supports short setups. Middle scores mean mixed or weak evidence.",
+      "Flow can override confidence: if institutional bias contradicts the trade direction, the app lowers confidence.",
+    ],
+  },
+};
+
+function InfoPopup({ help, align = "left" }) {
+  const [open, setOpen] = useState(false);
+  if (!help) return null;
+
+  return (
+    <span style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
+      <button
+        type="button"
+        aria-label={`Show ${help.title} explanation`}
+        aria-expanded={open}
+        onClick={e => {
+          e.stopPropagation();
+          setOpen(v => !v);
+        }}
+        style={{
+          width: 17,
+          height: 17,
+          borderRadius: "50%",
+          border: `1px solid ${C.border}`,
+          background: open ? C.accentDim : "rgba(255,255,255,0.03)",
+          color: open ? C.accent : C.muted,
+          fontSize: 11,
+          lineHeight: "15px",
+          fontWeight: 800,
+          cursor: "pointer",
+          padding: 0,
+          textAlign: "center",
+        }}
+      >
+        i
+      </button>
+      {open && (
+        <span
+          role="dialog"
+          aria-label={`${help.title} explanation`}
+          onClick={e => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            top: 22,
+            [align === "right" ? "right" : "left"]: 0,
+            width: 280,
+            maxWidth: "min(280px, calc(100vw - 44px))",
+            zIndex: 50,
+            background: "#0b1017",
+            border: `1px solid ${C.border}`,
+            borderRadius: 8,
+            boxShadow: "0 14px 40px rgba(0,0,0,0.48)",
+            padding: "12px 13px",
+            color: C.textDim,
+            textTransform: "none",
+            letterSpacing: 0,
+            textAlign: "left",
+            whiteSpace: "normal",
+          }}
+        >
+          <span style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 8 }}>
+            <span style={{ fontSize: 12, color: C.text, fontWeight: 800 }}>{help.title}</span>
+            <button
+              type="button"
+              aria-label="Close explanation"
+              onClick={() => setOpen(false)}
+              style={{
+                border: "none",
+                background: "transparent",
+                color: C.muted,
+                cursor: "pointer",
+                fontSize: 15,
+                lineHeight: 1,
+                padding: 0,
+              }}
+            >
+              ×
+            </button>
+          </span>
+          {help.body.map((line, i) => (
+            <span key={i} style={{ display: "block", fontSize: 11, lineHeight: 1.55, marginTop: i ? 7 : 0 }}>
+              {line}
+            </span>
+          ))}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -1044,7 +1242,7 @@ function InstitutionalPanel({ flow }) {
   };
 
   return (
-    <div style={{ border: `1px solid rgba(106,130,212,0.4)`, borderRadius: 4, overflow: "hidden", background: "rgba(106,130,212,0.04)" }}>
+    <div style={{ border: `1px solid rgba(106,130,212,0.4)`, borderRadius: 4, overflow: "visible", background: "rgba(106,130,212,0.04)" }}>
       <div style={{ padding: "10px 12px", background: "rgba(106,130,212,0.1)", borderBottom: `1px solid rgba(106,130,212,0.25)`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
           <div style={{ fontSize: 9, color: C.inst, textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 700, marginBottom: 3 }}>🏛 Institutional Flow</div>
@@ -1054,7 +1252,9 @@ function InstitutionalPanel({ flow }) {
         </div>
         {score != null && (
           <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 8, color: C.muted, marginBottom: 2 }}>FLOW SCORE</div>
+            <div style={{ fontSize: 8, color: C.muted, marginBottom: 2, display: "inline-flex", alignItems: "center", gap: 5 }}>
+              FLOW SCORE <InfoPopup help={METRIC_HELP.flowScore} align="right" />
+            </div>
             <div style={{ fontFamily: "Syne,sans-serif", fontSize: 24, fontWeight: 800, color: scoreColor, lineHeight: 1 }}>{score}</div>
             <div style={{ height: 3, width: 48, background: C.border, borderRadius: 2, marginTop: 3, overflow: "hidden" }}>
               <div style={{ height: "100%", width: `${score}%`, background: scoreColor }} />
@@ -1134,7 +1334,7 @@ function SignalCard({ signal, leverage, budget, riskPct }) {
   const nfColor = nf => nf === "POSITIVE" ? C.buy : nf === "NEGATIVE" ? C.sell : nf === "MIXED" ? C.hold : C.muted;
 
   return (
-    <div style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, borderRadius: 12, overflow: "hidden", borderTop: `3px solid ${ac}` }}>
+    <div style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, borderRadius: 12, overflow: "visible", borderTop: `3px solid ${ac}` }}>
       <div style={{ padding: "18px 20px" }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 16, gap: 12 }}>
           <div>
@@ -1157,13 +1357,13 @@ function SignalCard({ signal, leverage, budget, riskPct }) {
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
           {[
-            { label: "Confidence", val: `${signal.confidence}%`, color: ac },
+            { label: "Confidence", val: `${signal.confidence}%`, color: ac, help: METRIC_HELP.confidence },
             { label: "Leverage", val: `${signal.suggestedLeverage || leverage}×`, color: C.gold },
             { label: "Stop Loss", val: `−${slPct}%`, color: C.sell, note: signal.slWasCapped ? "Tightened" : null },
             { label: "Take Profit", val: `+${tpPct}%`, color: C.buy },
-          ].map(({ label, val, color, note }) => (
+          ].map(({ label, val, color, note, help }) => (
             <div key={label} style={{ background: C.surface, borderRadius: 8, padding: "10px 12px" }}>
-              <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 5, fontWeight: 600 }}>{label}</div>
+              <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 5, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{label}{help && <InfoPopup help={help} />}</div>
               <div className="mono" style={{ fontSize: 16, fontWeight: 700, color, lineHeight: 1.1 }}>{val}</div>
               {note && <div style={{ fontSize: 10, color: C.gold, marginTop: 4 }}>⚠ {note}</div>}
             </div>
@@ -1181,8 +1381,8 @@ function SignalCard({ signal, leverage, budget, riskPct }) {
               {signal.institutionalFlow.overallBias || "—"}
             </span>
             {signal.institutionalFlow.flowScore != null && (
-              <span style={{ marginLeft: "auto", fontSize: 10, fontWeight: 700, color: signal.institutionalFlow.flowScore >= 65 ? C.buy : signal.institutionalFlow.flowScore <= 35 ? C.sell : C.hold }}>
-                {signal.institutionalFlow.flowScore}/100
+              <span style={{ marginLeft: "auto", fontSize: 10, fontWeight: 700, color: signal.institutionalFlow.flowScore >= 65 ? C.buy : signal.institutionalFlow.flowScore <= 35 ? C.sell : C.hold, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                {signal.institutionalFlow.flowScore}/100 <InfoPopup help={METRIC_HELP.flowScore} align="right" />
               </span>
             )}
           </div>
