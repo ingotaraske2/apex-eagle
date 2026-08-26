@@ -69,6 +69,45 @@ function repairJson(str) {
   return s;
 }
 
+function fmtQuoteAnchors(quotesByAsset) {
+  const entries = Object.entries(quotesByAsset || {}).filter(([, q]) => Number(q?.currentPrice) > 0);
+  if (!entries.length) return "No independent quote anchors available.";
+  return entries
+    .map(([asset, q]) => {
+      const parts = [`${asset}: ${fmt(q.currentPrice)}`];
+      if (q.marketSession) parts.push(q.marketSession);
+      if (q.asOf) parts.push(`as of ${q.asOf}`);
+      if (q.source) parts.push(`source: ${q.source}`);
+      return parts.join(" | ");
+    })
+    .join("\n");
+}
+
+function normalizeQuoteMap(rawQuotes) {
+  const quotes = Array.isArray(rawQuotes?.quotes) ? rawQuotes.quotes : Array.isArray(rawQuotes) ? rawQuotes : [];
+  return quotes.reduce((acc, q) => {
+    const asset = String(q?.asset || q?.symbol || "").trim().toUpperCase();
+    const price = Number(q?.currentPrice ?? q?.price ?? q?.lastPrice);
+    if (!asset || !Number.isFinite(price) || price <= 0) return acc;
+    acc[asset] = {
+      asset,
+      currentPrice: price,
+      source: String(q?.source || "").trim(),
+      asOf: String(q?.asOf || q?.timestamp || "").trim(),
+      marketSession: String(q?.marketSession || q?.session || "").trim(),
+    };
+    return acc;
+  }, {});
+}
+
+function quoteMismatch(modelPrice, quotePrice) {
+  const model = Number(modelPrice);
+  const quote = Number(quotePrice);
+  if (!Number.isFinite(model) || model <= 0 || !Number.isFinite(quote) || quote <= 0) return null;
+  const diffPct = Math.abs(model - quote) / quote * 100;
+  return diffPct >= 0.5 ? +diffPct.toFixed(2) : null;
+}
+
 function calcPositionSize(budget, riskPct, slPct, leverage) {
   const riskAmount = budget * (riskPct / 100);
   const slDecimal = Math.abs(slPct) / 100;
@@ -77,14 +116,20 @@ function calcPositionSize(budget, riskPct, slPct, leverage) {
   return { riskAmount, positionSize: capped, margin: capped / leverage };
 }
 
-function normalizeSignals(signals, leverage) {
+function normalizeSignals(signals, leverage, quotesByAsset = {}) {
   return signals.map(s => {
-    const cap = SL_CAPS[s.asset] ?? SL_CAPS.DEFAULT;
+    const asset = String(s.asset || "").trim();
+    const quoteKey = asset.toUpperCase();
+    const cap = SL_CAPS[asset] ?? SL_CAPS[quoteKey] ?? SL_CAPS.DEFAULT;
     const rawSL = Number(s.stopLossPct) || 2.0;
     const clampedSL = Math.min(rawSL, cap);
     const minTP = +(clampedSL * 1.5).toFixed(2);
+    const trustedQuote = quotesByAsset[quoteKey];
+    const modelPrice = Number(s.currentPrice) || 0;
+    const mismatchPct = trustedQuote ? quoteMismatch(modelPrice, trustedQuote.currentPrice) : null;
     return {
       ...s,
+      asset,
       confidence: Number(s.confidence) || 70,
       stopLossPct: +clampedSL.toFixed(2),
       takeProfitPct: +Math.max(Number(s.takeProfitPct) || minTP, minTP).toFixed(2),
@@ -92,7 +137,12 @@ function normalizeSignals(signals, leverage) {
       rsi: Number(s.rsi) || 50,
       bullish: Number(s.bullish) || 50,
       suggestedLeverage: Math.min(Number(s.suggestedLeverage) || leverage, leverage),
-      currentPrice: Number(s.currentPrice) || 0,
+      modelCurrentPrice: modelPrice,
+      currentPrice: trustedQuote?.currentPrice || modelPrice,
+      quoteSource: trustedQuote?.source || "",
+      quoteAsOf: trustedQuote?.asOf || "",
+      quoteMarketSession: trustedQuote?.marketSession || "",
+      priceMismatchPct: mismatchPct,
     };
   });
 }
@@ -140,11 +190,33 @@ async function callClaude(env, body, retries = 3) {
   }
 }
 
+async function fetchGroundedQuotes(env, assets) {
+  if (!assets.length) return {};
+  const quoteText = await callClaude(env, {
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 900,
+    tools: [{ type: "web_search_20250305", name: "web_search" }],
+    messages: [{
+      role: "user",
+      content: `You are a market quote verifier. Search current exchange quote pages only.
+Use the latest regular-session close if the market is closed; include pre-market or after-hours only when the source explicitly labels it.
+Do not use analyst targets, previous close, charts without a latest price, or stale article prices.
+
+Find the current market quote for: ${assets.join(", ")}.
+Return ONLY valid JSON, no markdown:
+{"quotes":[{"asset":"<ticker>","currentPrice":<number>,"marketSession":"<regular|pre-market|after-hours|closed|unknown>","asOf":"<source timestamp or empty>","source":"<publisher/site>"}]}`,
+    }],
+  }, 2);
+  return normalizeQuoteMap(safeParseJson(quoteText));
+}
+
 // ── SIGNAL GENERATION (outcome loop) ─────────────────────────────────────────
 async function generateSignals(env, budget, leverage) {
   const now = new Date();
   const dateStr = now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
   const timeStr = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" }) + " UTC";
+  const groundedQuotes = await fetchGroundedQuotes(env, ASSETS);
+  const quoteAnchorText = fmtQuoteAnchors(groundedQuotes);
 
   let lastResult = null;
   let graderFeedback = null;
@@ -158,10 +230,12 @@ async function generateSignals(env, budget, leverage) {
     const agentPrompt = `You are APEX Eagle, elite intraday day trading analyst. Today is ${dateStr} at ${timeStr}.
 Assets: ${ASSETS.join(", ")}
 Portfolio: ${fmt(budget)} | Risk: ${RISK_PCT}% per trade (AGGRESSIVE) | Max leverage: ${leverage}×
+Verified quote anchors:
+${quoteAnchorText}
 
 GOAL: Find at least one strong BUY opportunity with confidence ≥ ${MIN_CONFIDENCE}%.
 ${graderFeedback ? `\n⚠ GRADER FEEDBACK — fix these issues:\n${graderFeedback}\n` : ""}
-Search for current prices and recent price action. Check dark pool, options flow, institutional signals.
+Search for recent price action. Use the verified quote anchor as currentPrice whenever one is provided. Do not use previous close as currentPrice when a fresher pre-market, regular, or after-hours quote is available. Check dark pool, options flow, institutional signals.
 SIGNAL ALIGNMENT: If institutional flow contradicts the technical signal, lower confidence 15+ pts or set HOLD.
 STOP LOSS RULES:
 - TIGHT SLs based on nearest technical level — NOT a percentage guess
@@ -184,7 +258,7 @@ Return ONLY valid JSON, no markdown:
       continue;
     }
     lastResult = result;
-    const normalized = normalizeSignals(result.signals, leverage);
+    const normalized = normalizeSignals(result.signals, leverage, groundedQuotes);
 
     // ── GRADER (Claude Haiku — separate context) ──
     console.log(`[APEX] Haiku grader evaluating iteration ${iteration}...`);
@@ -198,6 +272,7 @@ ${JSON.stringify(normalized.map(s => ({
   asset: s.asset, action: s.action, confidence: s.confidence,
   stopLossPct: s.stopLossPct, stopLossNote: s.stopLossNote,
   takeProfitPct: s.takeProfitPct, entryNote: s.entryNote, currentPrice: s.currentPrice,
+  modelCurrentPrice: s.modelCurrentPrice, priceMismatchPct: s.priceMismatchPct,
 })))}
 
 Return ONLY valid JSON:
@@ -232,7 +307,7 @@ Return ONLY valid JSON:
   // Return best attempt even if goal not fully met
   if (lastResult) {
     return {
-      signals: normalizeSignals(lastResult.signals, leverage),
+      signals: normalizeSignals(lastResult.signals, leverage, groundedQuotes),
       sentiment: { score: lastResult.overallSentiment ?? 50, label: lastResult.overallLabel ?? "NEUTRAL" },
       iterLog,
       goalMet: false,
