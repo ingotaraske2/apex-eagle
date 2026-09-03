@@ -239,7 +239,7 @@ function attachDiag(err, diag) {
 
 async function callApi(apiKey, body, retries = 3, callLabel = "api") {
   const {
-    model = "claude-sonnet-4-6",
+    model = "claude-sonnet-5",
     max_tokens = 4000,
     tools,
     system,
@@ -2030,8 +2030,8 @@ Do not use analyst targets, previous close, charts without a latest price, or st
     ];
     const quoteData = await callApi(apiKey, {
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 900,
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
+      max_tokens: 700,
+      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
       system: quoteSystem,
       messages: [{
         role: "user",
@@ -2082,7 +2082,7 @@ Return JSON exactly:
       setLoaderStep("Grounding current market quotes…");
       const groundedQuotes = await fetchGroundedQuotes(selectedAssets);
       const quoteAnchorText = formatQuoteAnchors(groundedQuotes);
-      const MAX_ITER = 3;
+      const MAX_ITER = 2;
       let lastResult = null, graderFeedback = null, goalMet = false;
       let finalSignals = [];
       const iterLog = [];
@@ -2111,11 +2111,11 @@ Verified quote anchors:
 ${quoteAnchorText}
 GOAL: Find at least one strong BUY or SELL opportunity with confidence >= 65%.
 ${graderFeedback ? `GRADER FEEDBACK — fix these issues:\n${graderFeedback}\n` : ""}
-Search recent price action only. Use the verified quote anchor as currentPrice whenever one is provided. Do not use previous close as currentPrice when a fresher pre-market, regular, or after-hours quote is available. Limit to 3 searches maximum.`;
+Search recent price action only. Use the verified quote anchor as currentPrice whenever one is provided. Do not use previous close as currentPrice when a fresher pre-market, regular, or after-hours quote is available. Limit to 2 searches maximum.`;
 
         const agentData = await callApi(apiKey, {
-          max_tokens: 2000,
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
+          max_tokens: 1800,
+          tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
           system: agentSystem,
           messages: [{ role: "user", content: agentUserMsg }],
         }, 3, `agent-iter-${iter}`);
@@ -2141,7 +2141,7 @@ Return ONLY valid JSON: {"passed":<true if ALL 6 criteria pass>,"goalMet":<true 
         ];
         const graderData = await callApi(apiKey, {
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 600,
+          max_tokens: 500,
           system: graderSystem,
           messages: [{ role: "user", content: JSON.stringify(normalized.map(s => ({ asset: s.asset, action: s.action, confidence: s.confidence, stopLossPct: s.stopLossPct, stopLossNote: s.stopLossNote, takeProfitPct: s.takeProfitPct, entryNote: s.entryNote, currentPrice: s.currentPrice, modelCurrentPrice: s.modelCurrentPrice, priceMismatchPct: s.priceMismatchPct }))) }],
         }, 3, `grader-iter-${iter}`);
@@ -2180,7 +2180,7 @@ Return ONLY valid JSON: {"passed":<true if ALL 6 criteria pass>,"goalMet":<true 
         setRiskSummary({ totalMargin: active.reduce((sum, s) => sum + calcPositionSize(budget, riskPct, s.stopLossPct, s.suggestedLeverage).margin, 0), totalRisk: active.length * (budget * riskPct / 100), activeCount: active.length, total: fb.length });
       }
 
-      // Enrichment — only active (BUY/SELL) signals, two focused searches per asset
+      // Enrichment — only active (BUY/SELL) signals, one combined search request
       setLoaderStep("Scanning institutional flow & dark pool…");
       const currentSigs = finalSignals
         .filter(s => s.action !== "HOLD")
@@ -2194,25 +2194,26 @@ Return ONLY valid JSON: {"passed":<true if ALL 6 criteria pass>,"goalMet":<true 
               cache_control: { type: "ephemeral" },
             },
           ];
-          const enrichedByAsset = {};
-          await Promise.all(currentSigs.map(async sig => {
-            const newsPrompt = `Search news for ${sig.asset} ($${sig.currentPrice}) from the last 4 hours only.
-Return ONLY valid JSON: {"sentimentSummary":{"headline":"<1 sentence>","bullPoints":["<b1>","<b2>"],"bearPoints":["<r1>","<r2>"],"catalysts":["<c1>"],"analystConsensus":"<short>","newsFlow":"<POSITIVE|NEGATIVE|MIXED|NEUTRAL|NO_RECENT_DATA>","socialSentiment":"<VERY_BULLISH|BULLISH|NEUTRAL|BEARISH|VERY_BEARISH>"},"ohlcv":[{"o":<n>,"h":<n>,"l":<n>,"c":<n>,"v":<0-100>}]}
-ohlcv: exactly 20 candles ending near $${sig.currentPrice}.`;
-            const flowPrompt = `Search institutional flow for ${sig.asset}: dark pool prints, options put/call ratio, unusual blocks, ETF flows.
-Return ONLY valid JSON: {"institutionalFlow":{"overallBias":"<ACCUMULATING|DISTRIBUTING|NEUTRAL>","darkPool":{"signal":"<BULLISH|BEARISH|NEUTRAL|NO_DATA>","detail":"<detail>","recentPrints":["<p1>"]},"optionsFlow":{"putCallRatio":"<n or N/A>","signal":"<BULLISH|BEARISH|NEUTRAL>","unusualActivity":"<detail>"},"insiderActivity":{"signal":"<BUYING|SELLING|NEUTRAL|NO_RECENT>","detail":"<detail>"},"etfFlow":{"signal":"<INFLOW|OUTFLOW|NEUTRAL>","detail":"<detail>"},"institutionalOwnership":"<short>","13fChange":"<short>","flowScore":<0-100>}}`;
-
-            const [newsData, flowData] = await Promise.all([
-              callApi(apiKey, { model: "claude-haiku-4-5-20251001", max_tokens: 1200, tools: [{ type: "web_search_20250305", name: "web_search" }], system: enrichSystem, messages: [{ role: "user", content: newsPrompt }] }, 2, `enrich-news-${sig.asset}`),
-              callApi(apiKey, { model: "claude-haiku-4-5-20251001", max_tokens: 800, tools: [{ type: "web_search_20250305", name: "web_search" }], system: enrichSystem, messages: [{ role: "user", content: flowPrompt }] }, 2, `enrich-flow-${sig.asset}`),
-            ]);
-            const news = safeParseJson(newsData.content.filter(b => b.type === "text").map(b => b.text).join(""));
-            const flow = safeParseJson(flowData.content.filter(b => b.type === "text").map(b => b.text).join(""));
-            enrichedByAsset[sig.asset] = { sentimentSummary: news?.sentimentSummary || null, ohlcv: news?.ohlcv || null, institutionalFlow: flow?.institutionalFlow || null };
-          }));
+          const assetsPrompt = currentSigs.map(sig => `${sig.asset} ($${sig.currentPrice})`).join(", ");
+          const enrichmentPrompt = `For each asset, search news from the last 4 hours and institutional flow (dark pool prints, options put/call ratio, unusual blocks, ETF flows, insider activity, ownership, and 13F changes).
+Assets: ${assetsPrompt}
+Return ONLY valid JSON, no markdown, with one key per asset:
+{"assets":{"<TICKER>":{"sentimentSummary":{"headline":"<1 sentence>","bullPoints":["<b1>","<b2>"],"bearPoints":["<r1>","<r2>"],"catalysts":["<c1>"],"analystConsensus":"<short>","newsFlow":"<POSITIVE|NEGATIVE|MIXED|NEUTRAL|NO_RECENT_DATA>","socialSentiment":"<VERY_BULLISH|BULLISH|NEUTRAL|BEARISH|VERY_BEARISH>"},"ohlcv":[{"o":<n>,"h":<n>,"l":<n>,"c":<n>,"v":<0-100>}],"institutionalFlow":{"overallBias":"<ACCUMULATING|DISTRIBUTING|NEUTRAL>","darkPool":{"signal":"<BULLISH|BEARISH|NEUTRAL|NO_DATA>","detail":"<detail>","recentPrints":["<p1>"]},"optionsFlow":{"putCallRatio":"<n or N/A>","signal":"<BULLISH|BEARISH|NEUTRAL>","unusualActivity":"<detail>"},"insiderActivity":{"signal":"<BUYING|SELLING|NEUTRAL|NO_RECENT>","detail":"<detail>"},"etfFlow":{"signal":"<INFLOW|OUTFLOW|NEUTRAL>","detail":"<detail>"},"institutionalOwnership":"<short>","13fChange":"<short>","flowScore":<0-100>}}}}`;
+          const enrichmentData = await callApi(apiKey, {
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 1800,
+            tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
+            system: enrichSystem,
+            messages: [{ role: "user", content: enrichmentPrompt }],
+          }, 2, "enrich-combined");
+          const enrichmentText = enrichmentData.content.filter(b => b.type === "text").map(b => b.text).join("");
+          const rawEnrichedByAsset = safeParseJson(enrichmentText)?.assets || {};
+          const enrichedByAsset = Object.fromEntries(
+            Object.entries(rawEnrichedByAsset).map(([asset, data]) => [String(asset).trim().toUpperCase(), data]),
+          );
 
           setSignals(prev => prev.map(s => {
-            const e = enrichedByAsset[s.asset];
+            const e = enrichedByAsset[String(s.asset).trim().toUpperCase()];
             if (!e) return { ...s, ohlcv: s.ohlcv || generateFallbackOHLCV(s.currentPrice, s.trend, 20) };
             const rawOhlcv = Array.isArray(e.ohlcv) ? e.ohlcv.filter(c => c && typeof c.o === "number") : [];
             const ohlcv = rawOhlcv.length >= 3 ? rawOhlcv : generateFallbackOHLCV(s.currentPrice, s.trend, 20);

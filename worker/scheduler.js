@@ -23,7 +23,7 @@ const ASSETS = ["AMD", "NVDA", "GOOGL"];
 const RISK_PCT = 3; // Aggressive
 const DEFAULT_BUDGET = 10000;
 const DEFAULT_LEVERAGE = 2;
-const MAX_ITERATIONS = 3;
+const MAX_ITERATIONS = 2;
 const MIN_CONFIDENCE = 65;
 
 const SL_CAPS = {
@@ -149,13 +149,14 @@ function normalizeSignals(signals, leverage, quotesByAsset = {}) {
 
 // ── ANTHROPIC API ─────────────────────────────────────────────────────────────
 async function callClaude(env, body, retries = 3) {
-  const { model = "claude-sonnet-4-5-20250929", max_tokens = 4000, tools, messages = [] } = body;
+  const { model = "claude-sonnet-5", max_tokens = 2400, tools, system, messages = [] } = body;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   const requestBody = {
     model,
     max_tokens,
     messages,
+    ...(system ? { system } : {}),
     ...(Array.isArray(tools) && tools.length ? { tools } : {}),
   };
 
@@ -194,15 +195,19 @@ async function fetchGroundedQuotes(env, assets) {
   if (!assets.length) return {};
   const quoteText = await callClaude(env, {
     model: "claude-haiku-4-5-20251001",
-    max_tokens: 900,
-    tools: [{ type: "web_search_20250305", name: "web_search" }],
-    messages: [{
-      role: "user",
-      content: `You are a market quote verifier. Search current exchange quote pages only.
+    max_tokens: 700,
+    system: [{
+      type: "text",
+      text: `You are a market quote verifier. Search current exchange quote pages only.
 Use the latest regular-session close if the market is closed; include pre-market or after-hours only when the source explicitly labels it.
 Do not use analyst targets, previous close, charts without a latest price, or stale article prices.
-
-Find the current market quote for: ${assets.join(", ")}.
+Return ONLY valid JSON, no markdown.`,
+      cache_control: { type: "ephemeral" },
+    }],
+    tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
+    messages: [{
+      role: "user",
+      content: `Find the current market quote for: ${assets.join(", ")}.
 Return ONLY valid JSON, no markdown:
 {"quotes":[{"asset":"<ticker>","currentPrice":<number>,"marketSession":"<regular|pre-market|after-hours|closed|unknown>","asOf":"<source timestamp or empty>","source":"<publisher/site>"}]}`,
     }],
@@ -246,8 +251,23 @@ Return ONLY valid JSON, no markdown:
 {"overallSentiment":<0-100>,"overallLabel":"<EXTREME FEAR|FEAR|NEUTRAL|GREED|EXTREME GREED>","signals":[{"asset":"<ticker>","assetFull":"<name>","currentPrice":<n>,"action":"<BUY|SELL|HOLD>","confidence":<0-100>,"suggestedLeverage":<1-${leverage}>,"entryNote":"<specific entry e.g. breakout above $X>","stopLossPct":<n>,"stopLossNote":"<exact price + reason>","takeProfitPct":<n>,"takeProfitNote":"<target>","bullish":<0-100>,"keyLevel":"<price>","rsi":<0-100>,"trend":"<UPTREND|DOWNTREND|SIDEWAYS>","patterns":"<pattern>","volume":"<ABOVE_AVG|BELOW_AVG|AVERAGE>","reasoning":"<2-3 sentences>"}]}`;
 
     const agentText = await callClaude(env, {
-      max_tokens: 3000,
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
+      model: "claude-sonnet-5",
+      max_tokens: 2400,
+      system: [{
+        type: "text",
+        text: `You are APEX Eagle, elite intraday day trading analyst.
+Use the verified quote anchor as currentPrice whenever one is provided. Do not use previous close as currentPrice when a fresher pre-market, regular, or after-hours quote is available. Search for recent price action and check dark pool, options flow, institutional signals.
+SIGNAL ALIGNMENT: If institutional flow contradicts the technical signal, lower confidence 15+ pts or set HOLD.
+STOP LOSS RULES:
+- TIGHT SLs based on nearest technical level — NOT a percentage guess
+- Hard caps: GOOGL≤2.0%, NVDA≤2.5%, AMD≤2.5%
+- TP must be ≥1.5× SL | stopLossNote MUST include a specific price | If no tight SL → HOLD
+
+Return ONLY valid JSON, no markdown:
+{"overallSentiment":<0-100>,"overallLabel":"<EXTREME FEAR|FEAR|NEUTRAL|GREED|EXTREME GREED>","signals":[{"asset":"<ticker>","assetFull":"<name>","currentPrice":<n>,"action":"<BUY|SELL|HOLD>","confidence":<0-100>,"suggestedLeverage":<1-${leverage}>,"entryNote":"<specific entry e.g. breakout above $X>","stopLossPct":<n>,"stopLossNote":"<exact price + reason>","takeProfitPct":<n>,"takeProfitNote":"<target>","bullish":<0-100>,"keyLevel":"<price>","rsi":<0-100>,"trend":"<UPTREND|DOWNTREND|SIDEWAYS>","patterns":"<pattern>","volume":"<ABOVE_AVG|BELOW_AVG|AVERAGE>","reasoning":"<2-3 sentences>"}]}`,
+        cache_control: { type: "ephemeral" },
+      }],
+      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
       messages: [{ role: "user", content: agentPrompt }],
     });
 
@@ -262,25 +282,27 @@ Return ONLY valid JSON, no markdown:
 
     // ── GRADER (Claude Haiku — separate context) ──
     console.log(`[APEX] Haiku grader evaluating iteration ${iteration}...`);
-    const graderPrompt = `You are the APEX Eagle Outcome Grader running on Claude Haiku 4.5. You did NOT produce this output — evaluate it independently.
-
-## RUBRIC
-${OUTCOME_RUBRIC}
-
-## AGENT OUTPUT
-${JSON.stringify(normalized.map(s => ({
+    const graderPrompt = JSON.stringify(normalized.map(s => ({
   asset: s.asset, action: s.action, confidence: s.confidence,
   stopLossPct: s.stopLossPct, stopLossNote: s.stopLossNote,
   takeProfitPct: s.takeProfitPct, entryNote: s.entryNote, currentPrice: s.currentPrice,
   modelCurrentPrice: s.modelCurrentPrice, priceMismatchPct: s.priceMismatchPct,
-})))}
-
-Return ONLY valid JSON:
-{"passed":<true if ALL criteria pass>,"goalMet":<true if C1+C2 both pass>,"criteria":{"C1":{"pass":<bool>,"note":"<brief>"},"C2":{"pass":<bool>,"note":"<brief>"},"C3":{"pass":<bool>,"note":"<brief>"},"C4":{"pass":<bool>,"note":"<brief>"},"C5":{"pass":<bool>,"note":"<brief>"},"C6":{"pass":<bool>,"note":"<brief>"}},"feedback":"<if failed: what agent must fix. If passed: All criteria met.>"}`;
+})));
 
     const graderText = await callClaude(env, {
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 600,
+      max_tokens: 500,
+      system: [{
+        type: "text",
+        text: `You are the APEX Eagle Outcome Grader running on Claude Haiku 4.5. You did NOT produce the agent output — evaluate it independently.
+
+## RUBRIC
+${OUTCOME_RUBRIC}
+
+Return ONLY valid JSON:
+{"passed":<true if ALL criteria pass>,"goalMet":<true if C1+C2 both pass>,"criteria":{"C1":{"pass":<bool>,"note":"<brief>"},"C2":{"pass":<bool>,"note":"<brief>"},"C3":{"pass":<bool>,"note":"<brief>"},"C4":{"pass":<bool>,"note":"<brief>"},"C5":{"pass":<bool>,"note":"<brief>"},"C6":{"pass":<bool>,"note":"<brief>"}},"feedback":"<if failed: what agent must fix. If passed: All criteria met.>"}`,
+        cache_control: { type: "ephemeral" },
+      }],
       messages: [{ role: "user", content: graderPrompt }],
     });
 
