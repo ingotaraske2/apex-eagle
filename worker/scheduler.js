@@ -18,6 +18,8 @@
  *   LEVERAGE            — max leverage 1-5, defaults to 2
  */
 
+import { SIGNAL_MODEL, thinkingOptions, assertCompleteResponse } from "../shared/claude.mjs";
+
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 const ASSETS = ["AMD", "NVDA", "GOOGL"];
 const RISK_PCT = 3; // Aggressive
@@ -149,12 +151,13 @@ function normalizeSignals(signals, leverage, quotesByAsset = {}) {
 
 // ── ANTHROPIC API ─────────────────────────────────────────────────────────────
 async function callClaude(env, body, retries = 3) {
-  const { model = "claude-sonnet-5", max_tokens = 2400, tools, system, messages = [] } = body;
+  const { model = SIGNAL_MODEL, max_tokens = 2400, tools, system, messages = [] } = body;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   const requestBody = {
     model,
     max_tokens,
+    ...thinkingOptions(model),
     messages,
     ...(system ? { system } : {}),
     ...(Array.isArray(tools) && tools.length ? { tools } : {}),
@@ -183,8 +186,13 @@ async function callClaude(env, body, retries = 3) {
 
       const data = await res.json();
       if (data.error) throw new Error(data.error.message || "Anthropic API error");
+      assertCompleteResponse(data);
       return (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
     } catch (err) {
+      if (err.retryable === false) {
+        console.error("[APEX] Incomplete model response", JSON.stringify(err.diag));
+        throw err;
+      }
       if (attempt < retries) { await sleep(1000 * Math.pow(2, attempt)); continue; }
       throw err;
     }
@@ -195,7 +203,7 @@ async function fetchGroundedQuotes(env, assets) {
   if (!assets.length) return {};
   const quoteText = await callClaude(env, {
     model: "claude-haiku-4-5-20251001",
-    max_tokens: 700,
+    max_tokens: Math.max(700, assets.length * 250),
     system: [{
       type: "text",
       text: `You are a market quote verifier. Search current exchange quote pages only.
@@ -204,10 +212,12 @@ Do not use analyst targets, previous close, charts without a latest price, or st
 Return ONLY valid JSON, no markdown.`,
       cache_control: { type: "ephemeral" },
     }],
-    tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
+    // A single search left later tickers without prices in live testing.
+    tools: [{ type: "web_search_20250305", name: "web_search", max_uses: assets.length }],
     messages: [{
       role: "user",
       content: `Find the current market quote for: ${assets.join(", ")}.
+Use up to one targeted search per ticker so every asset gets a quote. Never invent a missing price.
 Return ONLY valid JSON, no markdown:
 {"quotes":[{"asset":"<ticker>","currentPrice":<number>,"marketSession":"<regular|pre-market|after-hours|closed|unknown>","asOf":"<source timestamp or empty>","source":"<publisher/site>"}]}`,
     }],
@@ -251,7 +261,7 @@ Return ONLY valid JSON, no markdown:
 {"overallSentiment":<0-100>,"overallLabel":"<EXTREME FEAR|FEAR|NEUTRAL|GREED|EXTREME GREED>","signals":[{"asset":"<ticker>","assetFull":"<name>","currentPrice":<n>,"action":"<BUY|SELL|HOLD>","confidence":<0-100>,"suggestedLeverage":<1-${leverage}>,"entryNote":"<specific entry e.g. breakout above $X>","stopLossPct":<n>,"stopLossNote":"<exact price + reason>","takeProfitPct":<n>,"takeProfitNote":"<target>","bullish":<0-100>,"keyLevel":"<price>","rsi":<0-100>,"trend":"<UPTREND|DOWNTREND|SIDEWAYS>","patterns":"<pattern>","volume":"<ABOVE_AVG|BELOW_AVG|AVERAGE>","reasoning":"<2-3 sentences>"}]}`;
 
     const agentText = await callClaude(env, {
-      model: "claude-sonnet-5",
+      model: SIGNAL_MODEL,
       // The response is a large JSON object for several assets and follows a
       // web-search tool call. Avoid truncating the JSON document.
       max_tokens: 3000,
@@ -274,7 +284,7 @@ Return ONLY valid JSON, no markdown:
     });
 
     const result = safeParseJson(agentText);
-    if (!result?.signals) {
+    if (!Array.isArray(result?.signals) || !result.signals.length || result.signals.some(s => !s || typeof s !== "object")) {
       graderFeedback = "Agent returned invalid JSON. Retry with properly formatted output.";
       iterLog.push({ iteration, passed: false, goalMet: false, feedback: graderFeedback });
       continue;
@@ -293,7 +303,8 @@ Return ONLY valid JSON, no markdown:
 
     const graderText = await callClaude(env, {
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 500,
+      // Six rubric notes plus feedback exceeded 500 tokens in live runs.
+      max_tokens: 1000,
       system: [{
         type: "text",
         text: `You are the APEX Eagle Outcome Grader running on Claude Haiku 4.5. You did NOT produce the agent output — evaluate it independently.

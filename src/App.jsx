@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { SIGNAL_MODEL, thinkingOptions, responseDiagnostics, assertCompleteResponse } from "../shared/claude.mjs";
 
 // ── AUTH CONFIG ────────────────────────────────────────────────────────────────
 // Firebase config — replace with values from Firebase Console:
@@ -239,7 +240,7 @@ function attachDiag(err, diag) {
 
 async function callApi(apiKey, body, retries = 3, callLabel = "api") {
   const {
-    model = "claude-sonnet-5",
+    model = SIGNAL_MODEL,
     max_tokens = 4000,
     tools,
     system,
@@ -249,6 +250,7 @@ async function callApi(apiKey, body, retries = 3, callLabel = "api") {
   const requestBody = {
     model,
     max_tokens,
+    ...thinkingOptions(model),
     messages,
     ...(Array.isArray(tools) && tools.length ? { tools } : {}),
     ...(system ? { system } : {}),
@@ -359,11 +361,17 @@ async function callApi(apiKey, body, retries = 3, callLabel = "api") {
           responseBody: JSON.stringify(data).slice(0, 4000),
         });
       }
-      // Anthropic responses already match the { content: [{ type, text }, ...] }
-      // shape that call sites expect, so return as-is.
+      try {
+        assertCompleteResponse(data);
+      } catch (err) {
+        throw attachDiag(err, {
+          ...baseDiag(), ...responseDiagnostics(data),
+          status: res.status, responseHeaders,
+        });
+      }
       return data;
     } catch (err) {
-      const isRetryable = !err.message.includes("Rate limited")
+      const isRetryable = err.retryable !== false && !err.message.includes("Rate limited")
         && !err.message.includes("Anthropic spend")
         && !err.message.includes("Invalid API key")
         && !err.message.includes("Bad request");
@@ -1647,6 +1655,9 @@ function ErrorBanner({ error, onDismiss }) {
   const quickFacts = diag ? [
     { k: "Call", v: diag.callLabel },
     { k: "Model", v: diag.model },
+    { k: "Stop reason", v: diag.stopReason },
+    { k: "Output tokens", v: diag.outputTokens },
+    { k: "Content types", v: diag.contentTypes?.join(", ") },
     { k: "HTTP", v: diag.status ?? "—" },
     { k: "API status", v: diag.apiErrorStatus },
     { k: "Retry-After", v: diag.retryAfterHeader },
@@ -2030,12 +2041,14 @@ Do not use analyst targets, previous close, charts without a latest price, or st
     ];
     const quoteData = await callApi(apiKey, {
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 700,
-      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
+      max_tokens: Math.max(700, assets.length * 250),
+      // A single search left later tickers without prices in live testing.
+      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: assets.length }],
       system: quoteSystem,
       messages: [{
         role: "user",
         content: `Find the current market quote for: ${assets.join(", ")}.
+Use up to one targeted search per ticker so every asset gets a quote. Never invent a missing price.
 Return JSON exactly:
 {"quotes":[{"asset":"<ticker>","currentPrice":<number>,"marketSession":"<regular|pre-market|after-hours|closed|unknown>","asOf":"<source timestamp or empty>","source":"<publisher/site>"}]}`,
       }],
@@ -2084,6 +2097,7 @@ Return JSON exactly:
       const quoteAnchorText = formatQuoteAnchors(groundedQuotes);
       const MAX_ITER = 3;
       let lastResult = null, graderFeedback = null, goalMet = false;
+      let lastResponseDiag = null;
       let finalSignals = [];
       const iterLog = [];
 
@@ -2124,9 +2138,11 @@ Search recent price action only. Use the verified quote anchor as currentPrice w
         }, 3, `agent-iter-${iter}`);
         const agentText = agentData.content.filter(b => b.type === "text").map(b => b.text).join("");
         const result = safeParseJson(agentText);
-        if (!result?.signals?.length) {
+        lastResponseDiag = responseDiagnostics(agentData);
+        if (!Array.isArray(result?.signals) || !result.signals.length || result.signals.some(s => !s || typeof s !== "object")) {
           graderFeedback = "Agent returned invalid JSON or empty signals array. Retry with properly formatted output.";
           iterLog.push({ iteration: iter, passed: false, goalMet: false, feedback: graderFeedback });
+          setOutcomeStatus({ iteration: iter, passed: false, goalMet: false, feedback: graderFeedback, log: [...iterLog] });
           continue;
         }
         lastResult = result;
@@ -2144,7 +2160,8 @@ Return ONLY valid JSON: {"passed":<true if ALL 6 criteria pass>,"goalMet":<true 
         ];
         const graderData = await callApi(apiKey, {
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 500,
+          // Six rubric notes plus feedback exceeded 500 tokens in live runs.
+          max_tokens: 1000,
           system: graderSystem,
           messages: [{ role: "user", content: JSON.stringify(normalized.map(s => ({ asset: s.asset, action: s.action, confidence: s.confidence, stopLossPct: s.stopLossPct, stopLossNote: s.stopLossNote, takeProfitPct: s.takeProfitPct, entryNote: s.entryNote, currentPrice: s.currentPrice, modelCurrentPrice: s.modelCurrentPrice, priceMismatchPct: s.priceMismatchPct }))) }],
         }, 3, `grader-iter-${iter}`);
@@ -2172,6 +2189,10 @@ Return ONLY valid JSON: {"passed":<true if ALL 6 criteria pass>,"goalMet":<true 
           setOutcomeStatus({ iteration: iter, passed: false, goalMet: false, criteria: graderResult?.criteria ?? {}, feedback: graderFeedback, log: [...iterLog] });
           if (iter < MAX_ITER) await sleep(800);
         }
+      }
+
+      if (!lastResult) {
+        throw attachDiag(new Error("Analysis finished without usable signals. Please retry."), lastResponseDiag || {});
       }
 
       if (!goalMet && lastResult) {
