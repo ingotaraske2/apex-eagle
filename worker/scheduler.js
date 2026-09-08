@@ -23,7 +23,7 @@ const ASSETS = ["AMD", "NVDA", "GOOGL"];
 const RISK_PCT = 3; // Aggressive
 const DEFAULT_BUDGET = 10000;
 const DEFAULT_LEVERAGE = 2;
-const MAX_ITERATIONS = 2;
+const MAX_ITERATIONS = 3;
 const MIN_CONFIDENCE = 65;
 
 const SL_CAPS = {
@@ -252,7 +252,9 @@ Return ONLY valid JSON, no markdown:
 
     const agentText = await callClaude(env, {
       model: "claude-sonnet-5",
-      max_tokens: 2400,
+      // The response is a large JSON object for several assets and follows a
+      // web-search tool call. Avoid truncating the JSON document.
+      max_tokens: 3000,
       system: [{
         type: "text",
         text: `You are APEX Eagle, elite intraday day trading analyst.

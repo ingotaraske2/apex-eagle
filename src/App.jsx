@@ -2082,7 +2082,7 @@ Return JSON exactly:
       setLoaderStep("Grounding current market quotes…");
       const groundedQuotes = await fetchGroundedQuotes(selectedAssets);
       const quoteAnchorText = formatQuoteAnchors(groundedQuotes);
-      const MAX_ITER = 2;
+      const MAX_ITER = 3;
       let lastResult = null, graderFeedback = null, goalMet = false;
       let finalSignals = [];
       const iterLog = [];
@@ -2114,7 +2114,10 @@ ${graderFeedback ? `GRADER FEEDBACK — fix these issues:\n${graderFeedback}\n` 
 Search recent price action only. Use the verified quote anchor as currentPrice whenever one is provided. Do not use previous close as currentPrice when a fresher pre-market, regular, or after-hours quote is available. Limit to 2 searches maximum.`;
 
         const agentData = await callApi(apiKey, {
-          max_tokens: 1800,
+          // The response is a large JSON object for several assets and follows
+          // a web-search tool call. Keep enough output headroom to avoid a
+          // truncated JSON document that cannot be parsed.
+          max_tokens: 3000,
           tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
           system: agentSystem,
           messages: [{ role: "user", content: agentUserMsg }],
